@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://hocaron.github.io/sitemap.xml
