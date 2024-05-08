@@ -37,7 +37,7 @@ paginate:       5
 
 # Plugin
 languages: ["ko", "en"]
-default_lang: "ko"
+default_lang: "en"
 exclude_from_localization: ["javascript","images","css"]
 parallel_localization: true
 
