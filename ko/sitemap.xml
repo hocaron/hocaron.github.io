@@ -1,22 +1,118 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-        xsi:schemaLocation="http://www.sitemaps.org/schemas/sitemap/0.9 http://www.sitemaps.org/schemas/sitemap/0.9/sitemap.xsd"
-        xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
+    
+    
+    
+    
+    <url>
+        <loc>https://hocaron.github.io/ko/404.html</loc>
+    </url>
+    
+    
+    
+    
+    
+    <url>
+        <loc>https://hocaron.github.io/ko/about/</loc>
+    </url>
+    
+    
+    
+    
+    
+    <url>
+        <loc>https://hocaron.github.io/ko/</loc>
+    </url>
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    <url>
+        <loc>https://hocaron.github.io/ko/series/</loc>
+    </url>
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    <url>
+        <loc>https://hocaron.github.io/ko/2017-03-29/introducing-tale</loc>
+    </url>
+    
+    
+    
+    
+    
+    
+    <url>
+        <loc>https://hocaron.github.io/404.html</loc>
+    </url>
+    
+    
+    
+    
+    
+    <url>
+        <loc>https://hocaron.github.io/about/</loc>
+    </url>
+    
+    
+    
+    
+    
+    <url>
+        <loc>https://hocaron.github.io/</loc>
+    </url>
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    <url>
+        <loc>https://hocaron.github.io/series/</loc>
+    </url>
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     
     <url>
         <loc>https://hocaron.github.io/2017-03-29/introducing-tale</loc>
-        
-        <lastmod>2017-03-29T00:00:00+00:00</lastmod>
-        
-
-        
-        <changefreq>weekly</changefreq>
-        
-
-        
-        <priority>0.5</priority>
-        
-
     </url>
+    
+    
     
 </urlset>
