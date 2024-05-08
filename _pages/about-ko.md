@@ -1,7 +1,6 @@
 ---
 layout: post
 lang: ko
-title: "About"
 author: "Chester"
 permalink: /about/
 ---

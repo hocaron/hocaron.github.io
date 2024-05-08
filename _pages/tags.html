@@ -1,14 +1,10 @@
 ---
 layout: default
-title: "Tags"
-permalink: /tags/
+title: "Series"
+permalink: /series/
 ---
 
 <div class="tags">
-  <div class="tags-header">
-    <h2 class="tags-header-title">{{ page.title }}</h2>
-    <div class="tags-header-line"></div>
-  </div>
   <div class="tags-clouds">
     {% for tag in site.tags %}
     <a href="#{{ tag[0] }}">{{ tag[0] }}</a>
@@ -27,7 +23,6 @@ permalink: /tags/
       stroke-width="2"
       stroke-linecap="round"
       stroke-linejoin="round"
-      class="feather feather-tag"
     >
       <path
         d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"
