@@ -84,9 +84,33 @@ footer {
   font-family: $serif-secondary;
   padding: 2rem 0;
   text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
 
   span {
     color: $default-color;
     font-size: .8rem;
+    align-self: flex-end; /* span을 왼쪽 끝에 정렬 */
+    margin-left: 20px; /* 왼쪽 간격 조정 */
+  }
+
+  div {
+    color: $default-color;
+    size: .8rem;
+  }
+
+  .accounts {
+    align-self: flex-end; /* span을 왼쪽 끝에 정렬 */
+    margin-left: 20px; /* 왼쪽 간격 조정 */
+    a {
+      svg {
+        fill: $default-color;
+        width: 20px;
+      }
+    }
+    a:hover {
+      opacity: .6;
+    }
   }
 }
