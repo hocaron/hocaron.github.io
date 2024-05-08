@@ -47,12 +47,12 @@
       text-overflow: ellipsis;
     }
 
-    &-line {
-      @include transition(all 0.3s ease-out);
-      border-top: 0.1rem solid $default-shade;
-      display: block;
-      width: 0;
-    }
+    //&-line {
+    //  @include transition(all 0.3s ease-out);
+    //  border-top: 0.1rem solid $default-shade;
+    //  display: block;
+    //  width: 0;
+    //}
 
     &-meta {
       color: $default-tint;
