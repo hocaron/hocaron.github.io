@@ -1,17 +1,17 @@
 # Site settings
-title:          Tale
+title:          Growth through documentation
 description:    "Minimal Jekyll theme for storytellers"
-baseurl:        "/tale"
-url:            "https://chesterhow.github.io"
+baseurl:        ""
+url:            "https://hocaron.github.io"
 
 # Google Analytics
 google_analytics: UA—XXXXXXXX-X
 
 # Author
 author:
-  name:         Chester How
-  url:          https://chester.how
-  email:        chesterhow@gmail.com
+  name:         Hocaron
+  url:          https://hocaron.github.io
+  email:        kkannu0407@gmail.com
 
 # Build settings
 markdown:       kramdown
@@ -28,11 +28,18 @@ plugins:
   - jekyll-feed
   - jekyll-paginate
   - jekyll-seo-tag
+  - jekyll-polyglot
   # - jemoji #Uncomment this to allow emoji in your post
 
 # Permalinks
 permalink:      /:year-:month-:day/:title
 paginate:       5
+
+# Plugin
+languages: ["ko", "en"]
+default_lang: "ko"
+exclude_from_localization: ["javascript","images","css"]
+parallel_localization: true
 
 # Excludes
 exclude: [ Gemfile, Gemfile.lock, tale.gemspec ]
