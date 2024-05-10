@@ -114,3 +114,13 @@ footer {
     }
   }
 }
+
+.lang {
+  font-family: $sans-serif;
+  font-size: .7rem;
+}
+
+.lang.active {
+  font-weight: bold;
+  font-size: .7rem;
+}
