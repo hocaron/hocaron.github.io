@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
-
-  <head>
+<head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
@@ -27,7 +26,9 @@
 
   <!-- CSS -->
   <link rel="stylesheet" href="/assets/main.css">
+  <link rel="stylesheet" href="../assets/main.js">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Libre+Baskerville:400,400i,700">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.11.1/css/all.min.css" />
 
   <!-- Favicon -->
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32x32.png">
@@ -48,22 +49,37 @@
 
   
 
+  <!-- JavaScript -->
+  <script src="https://code.jquery.com/jquery-1.12.4.js"></script>
+  <script type="text/javascript" src="../assets/main.js"></script>
+
   <!-- SEO for Polyglot -->
   
 </head>
 
 
-  <body>
+<body>
+<div>
+  
 
-    <nav class="nav">
+
+
+
+<nav class="nav">
   <div class="nav-container">
     <a href="/">
       <h2 class="nav-title">Growth through documentation</h2>
     </a>
     <ul>
-      <li><a href="/">Posts</a></li>
-      <li><a href="/series">Series</a></li>
-      <li><a href="/about">About</a></li>
+      <li class="selected">
+      <a href="/">Posts</a>
+      </li>
+      <li >
+        <a href="/series">Series</a>
+      </li>
+      <li >
+        <a href="/about">About</a>
+      </li>
 
       <li>
         
@@ -94,8 +110,8 @@
 </nav>
 
 
-    <main>
-      <div class="post">
+  <main>
+    <div class="post">
   <div class="post-info">
     <span>Written by</span>
     
@@ -143,7 +159,11 @@
   </article>
 </div>
 
+<div class="pagination">
+  
+  
 
+  
   <!-- Start giscus -->
 <script src="https://giscus.app/client.js"
         data-repo="hocaron/hocaron.github.io"
@@ -163,10 +183,6 @@
 </script>
 <!-- End giscus -->
 
-
-
-<div class="pagination">
-  
   
 
   <a href="#" class="top">Top</a>
@@ -174,35 +190,23 @@
 
 <script src="../assets/js/toc.js"></script>
 
-    </main>
+  </main>
 
-    <footer>
-  <div class="accounts" style="display: flex; gap: 10px;">
-    <a href="http://github.com/hocaron" target="_blank" class="transition">
-      <svg viewBox="0 0 32.6 31.8" width="24" height="24">
-        <path fill-rule="evenodd" clip-rule="evenodd" d="M16.3,0C7.3,0,0,7.3,0,16.3c0,7.2,4.7,13.3,11.1,15.5
-                    c0.8,0.1,1.1-0.4,1.1-0.8c0-0.4,0-1.4,0-2.8c-4.5,1-5.5-2.2-5.5-2.2c-0.7-1.9-1.8-2.4-1.8-2.4c-1.5-1,0.1-1,0.1-1
-                    c1.6,0.1,2.5,1.7,2.5,1.7c1.5,2.5,3.8,1.8,4.7,1.4c0.1-1.1,0.6-1.8,1-2.2c-3.6-0.4-7.4-1.8-7.4-8.1c0-1.8,0.6-3.2,1.7-4.4
-                    C7.4,10.7,6.8,9,7.7,6.8c0,0,1.4-0.4,4.5,1.7c1.3-0.4,2.7-0.5,4.1-0.5c1.4,0,2.8,0.2,4.1,0.5c3.1-2.1,4.5-1.7,4.5-1.7
-                    c0.9,2.2,0.3,3.9,0.2,4.3c1,1.1,1.7,2.6,1.7,4.4c0,6.3-3.8,7.6-7.4,8c0.6,0.5,1.1,1.5,1.1,3c0,2.2,0,3.9,0,4.5
-                    c0,0.4,0.3,0.9,1.1,0.8c6.5-2.2,11.1-8.3,11.1-15.5C32.6,7.3,25.3,0,16.3,0z"></path>
-      </svg>
-    </a>
-    <a href="https://www.linkedin.com/in/sunwoo-ho-86b45823a" target="_blank" class="transition">
-      <svg viewBox="0 0 38.3 38.3" width="24" height="24">
-        <g>
-          <rect x="0.8" y="12.8" width="7.9" height="25.5"></rect>
-          <ellipse cx="4.7" cy="4.7" rx="4.7" ry="4.7"></ellipse>
-          <path d="M21.3,24.9c0-3.6,1.7-5.7,4.8-5.7c2.9,0,4.3,2.1,4.3,5.7c0,3.7,0,13.4,0,13.4h7.9c0,0,0-9.3,0-16.2
-                        c0-6.8-3.9-10.1-9.3-10.1s-7.7,4.2-7.7,4.2v-3.4h-7.6v25.5h7.6C21.3,38.3,21.3,28.8,21.3,24.9z"></path>
-        </g>
-      </svg>
-    </a>
-  </div>
-  <span>
-    &copy; <time datetime="2024-05-10 04:18:45 +0000">2024</time> Hocaron All rights reserved.
-  </span>
+  <footer>
+  <a href="mailto:kkannu0407@gmail.com">
+    <i class="far fa-envelope fa-fw"></i>
+  </a>
+  <a href="https://github.com/hocaron" target="_blank">
+    <i class="fab fa-github fa-fw"></i>
+  </a>
+  <a href="https://www.linkedin.com/in/sunwoo-ho-86b45823a" target="_blank">
+    <i class="fab fa-linkedin fa-fw"></i>
+  </a>
+
+  <br>
+  <span>&copy; 2024 Hocaron</span>
 </footer>
 
-  </body>
+</div>
+</body>
 </html>
