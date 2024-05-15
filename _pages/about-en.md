@@ -1,7 +1,6 @@
 ---
 layout: post
 lang: en
-author: "Hocaron"
 permalink: /about/
 ---
 
