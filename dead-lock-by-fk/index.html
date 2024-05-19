@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- Begin Jekyll SEO tag v2.8.0 -->
+<title>[Troubleshooting - DB] Foreign Key, Deadlock, and Query Delay Execution | public var hocaron</title>
+<meta name="generator" content="Jekyll v4.3.3" />
+<meta property="og:title" content="[Troubleshooting - DB] Foreign Key, Deadlock, and Query Delay Execution" />
+<meta name="author" content="Hocaron" />
+<meta property="og:locale" content="en" />
+<meta name="description" content="Foreign Key and Deadlock Deadlock occurs when two or more processes are each waiting for the other to release a resource, resulting in a situation where none of the processes can proceed. In this scenario, P1 waits for the resource held by P2, P2 waits for the resource held by P3, and so on, until the last process Pn waits for the resource held by P1, creating a circular wait and causing a deadlock. Foreign Key is a key used to link two tables together. The table containing the foreign key is called the child table, and the table referenced by the foreign key is called the parent table. In “Real MySQL” chapter 3, it states: “Foreign keys can cause deadlocks as they require checking for data in both the parent and child tables, propagating locks across multiple tables. Hence, they are rarely used in practice.” Oh… Locks propagate across multiple tables?!! Reproducing Deadlock Situations Preparation Steps CREATE TABLE parent ( id bigint not null primary key, name varchar(255) null, updated_at datetime(6) null ); CREATE TABLE child ( id bigint not null primary key, name varchar(255) null, parent_id bigint null, CONSTRAINT parent_id_unique UNIQUE (parent_id), CONSTRAINT child_fk FOREIGN KEY (parent_id) REFERENCES parent (id) ); CREATE TABLE child_index ( id bigint not null primary key, name varchar(255) null, parent_id bigint null, CONSTRAINT child_index_fk FOREIGN KEY (parent_id) REFERENCES parent (id) ); CREATE INDEX parent_id ON child_index (parent_id); INSERT INTO parent VALUES (1, &#39;parent_1&#39;, NOW()); Create the child table with a foreign key/unique key referencing the parent table’s id. Create the child_index table with a foreign key/index referencing the parent table’s id. Insert test data into the parent table. Now, Let’s Cause a Deadlock If a child row insert and a parent row update are performed in two sessions, a deadlock occurs 💣 TX1 TX2 lock BEGIN ; INSERT INTO child VALUES (1, ‘child1’, 1);   (1) child X, REC_NOT_GAP Lock, parent S Lock   BEGIN ; INSERT INTO child VALUES (1, ‘child1’, 1); (2) child X Lock waiting, parent S Lock UPDATE parent SET name = ‘newParent’ WHERE id = 1;   (3)   Deadlock found when trying to get lock; try restarting transaction (3) parent X lock required, but parent is in S lock in (2) To resolve (3), (2) needs to be resolved -&gt; To resolve (2), TX1 commit is required -&gt; To commit TX1, (3) needs to be resolved -&gt; Deadlock occurs When performing a write query on the child table, the foreign key constraint causes the parent’s lock state to be checked. If there’s no issue, the query is executed, and to maintain consistency, a shared lock is placed on the corresponding row in the parent table. Shared Lock (S Lock) A shared lock, also known as a read lock, allows read operations (SELECT) on the locked data but prohibits write operations. Other transactions can acquire a shared lock on the same data, but cannot acquire an exclusive lock. This ensures that the data cannot be modified while it’s being read, maintaining transaction integrity. Exclusive Lock (X Lock) An exclusive lock, also known as a write lock, allows both read and write operations for the transaction that holds the lock. Other transactions cannot perform any operations (read or write) on the locked data. This guarantees exclusive access to the locked data for the transaction holding the lock. If a parent row update and a child row insert are performed in two sessions, a duplicate key error occurs instead of a deadlock If the parent row is updated first, a deadlock does not occur. The duplicate key error is an expected behavior due to service-specific requirements. Analyzing the Logic Causing Deadlock in Production The service uses JPA, so let’s check with the show-sql option. SELECT * from parent WHERE id = 1; INSERT INTO child VALUES (1, &#39;child_1&#39;, 1); DELETE FROM child_index WHERE parent_id = 1; INSERT INTO child_index VALUES (1, &#39;child_index_1&#39;, 1); UPDATE parent SET updated_at = NOW() WHERE id = 1; (Tables and columns are simplified versions) If a child row insert and a parent row update are performed in two sessions, a deadlock occurs 💣 The reason for execution in two sessions is due to multiple simultaneous requests from the front end 🖱🤏🖱🤏. It’s curious that this issue only occurs with this specific button, while other buttons do not cause deadlocks 🤔. Understanding the Cause and Exploring Solutions to Deadlock ❎ First Attempt: Adjust Logic to Perform Parent Row Update Before Child Row Insert to Cause a Duplicate Key Error @Transactional public void createChildAndChildIndex (long parentId) { var parent = parentRepository.findById(parentId); // Update parent row parent.setUpdatedAt(LocalDateTime.now()); // Insert child row childRepository.save(new Child(&#39;child_1&#39;, parent)); childIndexRepository.deleteByParent(parent); childIndexRepository.save(new Child_Index(&#39;child_index_1&#39;, parent)); } However, queries are still executed in the order: child row insert → parent row update, causing deadlocks. 😇 Hibernate Query Execution Order Although it is known that JPA’s write-behind strategy defers query execution until the transaction commits, there is an order of execution. OrphanRemovalAction AbstractEntityInsertAction EntityUpdateAction QueuedOperationCollectionAction CollectionRemoveAction CollectionUpdateAction CollectionRecreateAction EntityDeleteAction 1. Inserts, in the order they were performed 2. Updates 3. Deletion of collection elements 4. Insertion of collection elements 5. Deletes, in the order they were performed FYI: Hibernate Query Execution Order What is a Foreign Key Constraint? When inserting data into a table with a foreign key, the referenced table must contain the actual data being referenced. This ensures data integrity by preventing references to non-existent data. This is likely why inserts are executed first! The reason the logic still results in a child row insert before a parent row update is due to the write-behind strategy, where inserts are prioritized over updates. ❎ Second Attempt: Use flush() After Parent Row Update to Ensure Query Execution Order @Transactional public void createParent (long parentId) { var parent = parentRepository.findById(parentId); // Update parent row parent.setUpdatedAt(LocalDateTime.now()); // Flush after parent row update parentRepository.flush(); // Insert child row childRepository.save(new Child(&#39;child_1&#39;, parent)); childIndexRepository.deleteByParent(parent); childIndexRepository.save(new Child_Index(&#39;child_index_1&#39;, parent)); } Queries are executed as intended! SELECT * from parent WHERE id = 1; UPDATE parent SET updated_at = NOW() WHERE id = 1; INSERT INTO child VALUES (1, &#39;child_1&#39;, 1); DELETE FROM child_index WHERE parent_id = 1; INSERT INTO child_index VALUES (1, &#39;child_index_1&#39;, 1); However, there are concerns about potential side effects of flush() and confusion for future developers seeing an unexpected flush() call. ✅ Third Attempt: Remove Foreign Key from the Child Table 🤔 How long does it take to remove a foreign key from a table with 2,288,112 rows?! The deadlock occurs because a change in a child row also causes a shared lock on the parent row. Removing the root cause might solve the problem. Concerned about potential service downtime during foreign key removal, we tested it. On a table with 54,973 rows, it took only 14 ms. After discussing within the team, we removed the foreign key without service interruption. Monitoring showed that after removing the foreign key, SQLTransactionRollbackException (deadlock) was replaced by DataIntegrityViolationException (duplicate key). Not Defeated Yet… The Index Was Waiting for Me… Summary When a foreign key is present, a change in a child row causes a shared lock on the parent row. There is an execution order for JPA’s write-behind strategy. The time taken to remove an FK key is shorter than expected. For the Record SHOW ENGINE innodb STATUS; - SHOW ENGINE innodb STATUS; LOCK WAIT 4 lock struct(s), heap size 1128, 2 row lock(s), undo log entries 1 *** (1) HOLDS THE LOCK(S): RECORD LOCKS space id 148 page no 4 n bits 72 index PRIMARY of table `jpa`.`parent` trx id 12534 lock mode S locks rec but not gap Record lock, heap no 2 PHYSICAL RECORD: n_fields 4; compact format; info bits 0 *** (1) WAITING FOR THIS LOCK TO BE GRANTED: RECORD LOCKS space id 149 page no 5 n bits 72 index parent_id_unique of table `jpa`.`child` trx id 12534 lock mode S waiting Record lock, heap no 2 PHYSICAL RECORD: n_fields 2; compact format; info bits 0 *** (2) TRANSACTION: TRANSACTION 12533, ACTIVE 13 sec starting index read mysql tables in use 1, locked 1 LOCK WAIT 6 lock struct(s), heap size 1128, 3 row lock(s), undo log entries 1 MySQL thread id 128, OS thread handle 6143324160, query id 12894 localhost 127.0.0.1 root updating /* ApplicationName=DataGrip 2022.3.2 */ UPDATE parent SET name = &#39;newParent&#39; WHERE id = 1 *** (2) HOLDS THE LOCK(S): RECORD LOCKS space id 149 page no 5 n bits 72 index parent_id_unique of table `jpa`.`child` trx id 12533 lock_mode X locks rec but not gap Record lock, heap no 2 PHYSICAL RECORD: n_fields 2; compact format; info bits 0 *** (2) WAITING FOR THIS LOCK TO BE GRANTED: RECORD LOCKS space id 148 page no 4 n bits 72 index PRIMARY of table `jpa`.`parent` trx id 12533 lock_mode X locks rec but not gap waiting Record lock, heap no 2 PHYSICAL RECORD: n_fields 4; compact format; info bits 0" />
+<meta property="og:description" content="Foreign Key and Deadlock Deadlock occurs when two or more processes are each waiting for the other to release a resource, resulting in a situation where none of the processes can proceed. In this scenario, P1 waits for the resource held by P2, P2 waits for the resource held by P3, and so on, until the last process Pn waits for the resource held by P1, creating a circular wait and causing a deadlock. Foreign Key is a key used to link two tables together. The table containing the foreign key is called the child table, and the table referenced by the foreign key is called the parent table. In “Real MySQL” chapter 3, it states: “Foreign keys can cause deadlocks as they require checking for data in both the parent and child tables, propagating locks across multiple tables. Hence, they are rarely used in practice.” Oh… Locks propagate across multiple tables?!! Reproducing Deadlock Situations Preparation Steps CREATE TABLE parent ( id bigint not null primary key, name varchar(255) null, updated_at datetime(6) null ); CREATE TABLE child ( id bigint not null primary key, name varchar(255) null, parent_id bigint null, CONSTRAINT parent_id_unique UNIQUE (parent_id), CONSTRAINT child_fk FOREIGN KEY (parent_id) REFERENCES parent (id) ); CREATE TABLE child_index ( id bigint not null primary key, name varchar(255) null, parent_id bigint null, CONSTRAINT child_index_fk FOREIGN KEY (parent_id) REFERENCES parent (id) ); CREATE INDEX parent_id ON child_index (parent_id); INSERT INTO parent VALUES (1, &#39;parent_1&#39;, NOW()); Create the child table with a foreign key/unique key referencing the parent table’s id. Create the child_index table with a foreign key/index referencing the parent table’s id. Insert test data into the parent table. Now, Let’s Cause a Deadlock If a child row insert and a parent row update are performed in two sessions, a deadlock occurs 💣 TX1 TX2 lock BEGIN ; INSERT INTO child VALUES (1, ‘child1’, 1);   (1) child X, REC_NOT_GAP Lock, parent S Lock   BEGIN ; INSERT INTO child VALUES (1, ‘child1’, 1); (2) child X Lock waiting, parent S Lock UPDATE parent SET name = ‘newParent’ WHERE id = 1;   (3)   Deadlock found when trying to get lock; try restarting transaction (3) parent X lock required, but parent is in S lock in (2) To resolve (3), (2) needs to be resolved -&gt; To resolve (2), TX1 commit is required -&gt; To commit TX1, (3) needs to be resolved -&gt; Deadlock occurs When performing a write query on the child table, the foreign key constraint causes the parent’s lock state to be checked. If there’s no issue, the query is executed, and to maintain consistency, a shared lock is placed on the corresponding row in the parent table. Shared Lock (S Lock) A shared lock, also known as a read lock, allows read operations (SELECT) on the locked data but prohibits write operations. Other transactions can acquire a shared lock on the same data, but cannot acquire an exclusive lock. This ensures that the data cannot be modified while it’s being read, maintaining transaction integrity. Exclusive Lock (X Lock) An exclusive lock, also known as a write lock, allows both read and write operations for the transaction that holds the lock. Other transactions cannot perform any operations (read or write) on the locked data. This guarantees exclusive access to the locked data for the transaction holding the lock. If a parent row update and a child row insert are performed in two sessions, a duplicate key error occurs instead of a deadlock If the parent row is updated first, a deadlock does not occur. The duplicate key error is an expected behavior due to service-specific requirements. Analyzing the Logic Causing Deadlock in Production The service uses JPA, so let’s check with the show-sql option. SELECT * from parent WHERE id = 1; INSERT INTO child VALUES (1, &#39;child_1&#39;, 1); DELETE FROM child_index WHERE parent_id = 1; INSERT INTO child_index VALUES (1, &#39;child_index_1&#39;, 1); UPDATE parent SET updated_at = NOW() WHERE id = 1; (Tables and columns are simplified versions) If a child row insert and a parent row update are performed in two sessions, a deadlock occurs 💣 The reason for execution in two sessions is due to multiple simultaneous requests from the front end 🖱🤏🖱🤏. It’s curious that this issue only occurs with this specific button, while other buttons do not cause deadlocks 🤔. Understanding the Cause and Exploring Solutions to Deadlock ❎ First Attempt: Adjust Logic to Perform Parent Row Update Before Child Row Insert to Cause a Duplicate Key Error @Transactional public void createChildAndChildIndex (long parentId) { var parent = parentRepository.findById(parentId); // Update parent row parent.setUpdatedAt(LocalDateTime.now()); // Insert child row childRepository.save(new Child(&#39;child_1&#39;, parent)); childIndexRepository.deleteByParent(parent); childIndexRepository.save(new Child_Index(&#39;child_index_1&#39;, parent)); } However, queries are still executed in the order: child row insert → parent row update, causing deadlocks. 😇 Hibernate Query Execution Order Although it is known that JPA’s write-behind strategy defers query execution until the transaction commits, there is an order of execution. OrphanRemovalAction AbstractEntityInsertAction EntityUpdateAction QueuedOperationCollectionAction CollectionRemoveAction CollectionUpdateAction CollectionRecreateAction EntityDeleteAction 1. Inserts, in the order they were performed 2. Updates 3. Deletion of collection elements 4. Insertion of collection elements 5. Deletes, in the order they were performed FYI: Hibernate Query Execution Order What is a Foreign Key Constraint? When inserting data into a table with a foreign key, the referenced table must contain the actual data being referenced. This ensures data integrity by preventing references to non-existent data. This is likely why inserts are executed first! The reason the logic still results in a child row insert before a parent row update is due to the write-behind strategy, where inserts are prioritized over updates. ❎ Second Attempt: Use flush() After Parent Row Update to Ensure Query Execution Order @Transactional public void createParent (long parentId) { var parent = parentRepository.findById(parentId); // Update parent row parent.setUpdatedAt(LocalDateTime.now()); // Flush after parent row update parentRepository.flush(); // Insert child row childRepository.save(new Child(&#39;child_1&#39;, parent)); childIndexRepository.deleteByParent(parent); childIndexRepository.save(new Child_Index(&#39;child_index_1&#39;, parent)); } Queries are executed as intended! SELECT * from parent WHERE id = 1; UPDATE parent SET updated_at = NOW() WHERE id = 1; INSERT INTO child VALUES (1, &#39;child_1&#39;, 1); DELETE FROM child_index WHERE parent_id = 1; INSERT INTO child_index VALUES (1, &#39;child_index_1&#39;, 1); However, there are concerns about potential side effects of flush() and confusion for future developers seeing an unexpected flush() call. ✅ Third Attempt: Remove Foreign Key from the Child Table 🤔 How long does it take to remove a foreign key from a table with 2,288,112 rows?! The deadlock occurs because a change in a child row also causes a shared lock on the parent row. Removing the root cause might solve the problem. Concerned about potential service downtime during foreign key removal, we tested it. On a table with 54,973 rows, it took only 14 ms. After discussing within the team, we removed the foreign key without service interruption. Monitoring showed that after removing the foreign key, SQLTransactionRollbackException (deadlock) was replaced by DataIntegrityViolationException (duplicate key). Not Defeated Yet… The Index Was Waiting for Me… Summary When a foreign key is present, a change in a child row causes a shared lock on the parent row. There is an execution order for JPA’s write-behind strategy. The time taken to remove an FK key is shorter than expected. For the Record SHOW ENGINE innodb STATUS; - SHOW ENGINE innodb STATUS; LOCK WAIT 4 lock struct(s), heap size 1128, 2 row lock(s), undo log entries 1 *** (1) HOLDS THE LOCK(S): RECORD LOCKS space id 148 page no 4 n bits 72 index PRIMARY of table `jpa`.`parent` trx id 12534 lock mode S locks rec but not gap Record lock, heap no 2 PHYSICAL RECORD: n_fields 4; compact format; info bits 0 *** (1) WAITING FOR THIS LOCK TO BE GRANTED: RECORD LOCKS space id 149 page no 5 n bits 72 index parent_id_unique of table `jpa`.`child` trx id 12534 lock mode S waiting Record lock, heap no 2 PHYSICAL RECORD: n_fields 2; compact format; info bits 0 *** (2) TRANSACTION: TRANSACTION 12533, ACTIVE 13 sec starting index read mysql tables in use 1, locked 1 LOCK WAIT 6 lock struct(s), heap size 1128, 3 row lock(s), undo log entries 1 MySQL thread id 128, OS thread handle 6143324160, query id 12894 localhost 127.0.0.1 root updating /* ApplicationName=DataGrip 2022.3.2 */ UPDATE parent SET name = &#39;newParent&#39; WHERE id = 1 *** (2) HOLDS THE LOCK(S): RECORD LOCKS space id 149 page no 5 n bits 72 index parent_id_unique of table `jpa`.`child` trx id 12533 lock_mode X locks rec but not gap Record lock, heap no 2 PHYSICAL RECORD: n_fields 2; compact format; info bits 0 *** (2) WAITING FOR THIS LOCK TO BE GRANTED: RECORD LOCKS space id 148 page no 4 n bits 72 index PRIMARY of table `jpa`.`parent` trx id 12533 lock_mode X locks rec but not gap waiting Record lock, heap no 2 PHYSICAL RECORD: n_fields 4; compact format; info bits 0" />
+<link rel="canonical" href="https://hocaron.github.io/dead-lock-by-fk/" />
+<meta property="og:url" content="https://hocaron.github.io/dead-lock-by-fk/" />
+<meta property="og:site_name" content="public var hocaron" />
+<meta property="og:type" content="article" />
+<meta property="article:published_time" content="2023-05-22T00:00:00+00:00" />
+<meta name="twitter:card" content="summary" />
+<meta property="twitter:title" content="[Troubleshooting - DB] Foreign Key, Deadlock, and Query Delay Execution" />
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","author":{"@type":"Person","name":"Hocaron","url":"https://hocaron.github.io"},"dateModified":"2023-05-22T00:00:00+00:00","datePublished":"2023-05-22T00:00:00+00:00","description":"Foreign Key and Deadlock Deadlock occurs when two or more processes are each waiting for the other to release a resource, resulting in a situation where none of the processes can proceed. In this scenario, P1 waits for the resource held by P2, P2 waits for the resource held by P3, and so on, until the last process Pn waits for the resource held by P1, creating a circular wait and causing a deadlock. Foreign Key is a key used to link two tables together. The table containing the foreign key is called the child table, and the table referenced by the foreign key is called the parent table. In “Real MySQL” chapter 3, it states: “Foreign keys can cause deadlocks as they require checking for data in both the parent and child tables, propagating locks across multiple tables. Hence, they are rarely used in practice.” Oh… Locks propagate across multiple tables?!! Reproducing Deadlock Situations Preparation Steps CREATE TABLE parent ( id bigint not null primary key, name varchar(255) null, updated_at datetime(6) null ); CREATE TABLE child ( id bigint not null primary key, name varchar(255) null, parent_id bigint null, CONSTRAINT parent_id_unique UNIQUE (parent_id), CONSTRAINT child_fk FOREIGN KEY (parent_id) REFERENCES parent (id) ); CREATE TABLE child_index ( id bigint not null primary key, name varchar(255) null, parent_id bigint null, CONSTRAINT child_index_fk FOREIGN KEY (parent_id) REFERENCES parent (id) ); CREATE INDEX parent_id ON child_index (parent_id); INSERT INTO parent VALUES (1, &#39;parent_1&#39;, NOW()); Create the child table with a foreign key/unique key referencing the parent table’s id. Create the child_index table with a foreign key/index referencing the parent table’s id. Insert test data into the parent table. Now, Let’s Cause a Deadlock If a child row insert and a parent row update are performed in two sessions, a deadlock occurs 💣 TX1 TX2 lock BEGIN ; INSERT INTO child VALUES (1, ‘child1’, 1);   (1) child X, REC_NOT_GAP Lock, parent S Lock   BEGIN ; INSERT INTO child VALUES (1, ‘child1’, 1); (2) child X Lock waiting, parent S Lock UPDATE parent SET name = ‘newParent’ WHERE id = 1;   (3)   Deadlock found when trying to get lock; try restarting transaction (3) parent X lock required, but parent is in S lock in (2) To resolve (3), (2) needs to be resolved -&gt; To resolve (2), TX1 commit is required -&gt; To commit TX1, (3) needs to be resolved -&gt; Deadlock occurs When performing a write query on the child table, the foreign key constraint causes the parent’s lock state to be checked. If there’s no issue, the query is executed, and to maintain consistency, a shared lock is placed on the corresponding row in the parent table. Shared Lock (S Lock) A shared lock, also known as a read lock, allows read operations (SELECT) on the locked data but prohibits write operations. Other transactions can acquire a shared lock on the same data, but cannot acquire an exclusive lock. This ensures that the data cannot be modified while it’s being read, maintaining transaction integrity. Exclusive Lock (X Lock) An exclusive lock, also known as a write lock, allows both read and write operations for the transaction that holds the lock. Other transactions cannot perform any operations (read or write) on the locked data. This guarantees exclusive access to the locked data for the transaction holding the lock. If a parent row update and a child row insert are performed in two sessions, a duplicate key error occurs instead of a deadlock If the parent row is updated first, a deadlock does not occur. The duplicate key error is an expected behavior due to service-specific requirements. Analyzing the Logic Causing Deadlock in Production The service uses JPA, so let’s check with the show-sql option. SELECT * from parent WHERE id = 1; INSERT INTO child VALUES (1, &#39;child_1&#39;, 1); DELETE FROM child_index WHERE parent_id = 1; INSERT INTO child_index VALUES (1, &#39;child_index_1&#39;, 1); UPDATE parent SET updated_at = NOW() WHERE id = 1; (Tables and columns are simplified versions) If a child row insert and a parent row update are performed in two sessions, a deadlock occurs 💣 The reason for execution in two sessions is due to multiple simultaneous requests from the front end 🖱🤏🖱🤏. It’s curious that this issue only occurs with this specific button, while other buttons do not cause deadlocks 🤔. Understanding the Cause and Exploring Solutions to Deadlock ❎ First Attempt: Adjust Logic to Perform Parent Row Update Before Child Row Insert to Cause a Duplicate Key Error @Transactional public void createChildAndChildIndex (long parentId) { var parent = parentRepository.findById(parentId); // Update parent row parent.setUpdatedAt(LocalDateTime.now()); // Insert child row childRepository.save(new Child(&#39;child_1&#39;, parent)); childIndexRepository.deleteByParent(parent); childIndexRepository.save(new Child_Index(&#39;child_index_1&#39;, parent)); } However, queries are still executed in the order: child row insert → parent row update, causing deadlocks. 😇 Hibernate Query Execution Order Although it is known that JPA’s write-behind strategy defers query execution until the transaction commits, there is an order of execution. OrphanRemovalAction AbstractEntityInsertAction EntityUpdateAction QueuedOperationCollectionAction CollectionRemoveAction CollectionUpdateAction CollectionRecreateAction EntityDeleteAction 1. Inserts, in the order they were performed 2. Updates 3. Deletion of collection elements 4. Insertion of collection elements 5. Deletes, in the order they were performed FYI: Hibernate Query Execution Order What is a Foreign Key Constraint? When inserting data into a table with a foreign key, the referenced table must contain the actual data being referenced. This ensures data integrity by preventing references to non-existent data. This is likely why inserts are executed first! The reason the logic still results in a child row insert before a parent row update is due to the write-behind strategy, where inserts are prioritized over updates. ❎ Second Attempt: Use flush() After Parent Row Update to Ensure Query Execution Order @Transactional public void createParent (long parentId) { var parent = parentRepository.findById(parentId); // Update parent row parent.setUpdatedAt(LocalDateTime.now()); // Flush after parent row update parentRepository.flush(); // Insert child row childRepository.save(new Child(&#39;child_1&#39;, parent)); childIndexRepository.deleteByParent(parent); childIndexRepository.save(new Child_Index(&#39;child_index_1&#39;, parent)); } Queries are executed as intended! SELECT * from parent WHERE id = 1; UPDATE parent SET updated_at = NOW() WHERE id = 1; INSERT INTO child VALUES (1, &#39;child_1&#39;, 1); DELETE FROM child_index WHERE parent_id = 1; INSERT INTO child_index VALUES (1, &#39;child_index_1&#39;, 1); However, there are concerns about potential side effects of flush() and confusion for future developers seeing an unexpected flush() call. ✅ Third Attempt: Remove Foreign Key from the Child Table 🤔 How long does it take to remove a foreign key from a table with 2,288,112 rows?! The deadlock occurs because a change in a child row also causes a shared lock on the parent row. Removing the root cause might solve the problem. Concerned about potential service downtime during foreign key removal, we tested it. On a table with 54,973 rows, it took only 14 ms. After discussing within the team, we removed the foreign key without service interruption. Monitoring showed that after removing the foreign key, SQLTransactionRollbackException (deadlock) was replaced by DataIntegrityViolationException (duplicate key). Not Defeated Yet… The Index Was Waiting for Me… Summary When a foreign key is present, a change in a child row causes a shared lock on the parent row. There is an execution order for JPA’s write-behind strategy. The time taken to remove an FK key is shorter than expected. For the Record SHOW ENGINE innodb STATUS; - SHOW ENGINE innodb STATUS; LOCK WAIT 4 lock struct(s), heap size 1128, 2 row lock(s), undo log entries 1 *** (1) HOLDS THE LOCK(S): RECORD LOCKS space id 148 page no 4 n bits 72 index PRIMARY of table `jpa`.`parent` trx id 12534 lock mode S locks rec but not gap Record lock, heap no 2 PHYSICAL RECORD: n_fields 4; compact format; info bits 0 *** (1) WAITING FOR THIS LOCK TO BE GRANTED: RECORD LOCKS space id 149 page no 5 n bits 72 index parent_id_unique of table `jpa`.`child` trx id 12534 lock mode S waiting Record lock, heap no 2 PHYSICAL RECORD: n_fields 2; compact format; info bits 0 *** (2) TRANSACTION: TRANSACTION 12533, ACTIVE 13 sec starting index read mysql tables in use 1, locked 1 LOCK WAIT 6 lock struct(s), heap size 1128, 3 row lock(s), undo log entries 1 MySQL thread id 128, OS thread handle 6143324160, query id 12894 localhost 127.0.0.1 root updating /* ApplicationName=DataGrip 2022.3.2 */ UPDATE parent SET name = &#39;newParent&#39; WHERE id = 1 *** (2) HOLDS THE LOCK(S): RECORD LOCKS space id 149 page no 5 n bits 72 index parent_id_unique of table `jpa`.`child` trx id 12533 lock_mode X locks rec but not gap Record lock, heap no 2 PHYSICAL RECORD: n_fields 2; compact format; info bits 0 *** (2) WAITING FOR THIS LOCK TO BE GRANTED: RECORD LOCKS space id 148 page no 4 n bits 72 index PRIMARY of table `jpa`.`parent` trx id 12533 lock_mode X locks rec but not gap waiting Record lock, heap no 2 PHYSICAL RECORD: n_fields 4; compact format; info bits 0","headline":"[Troubleshooting - DB] Foreign Key, Deadlock, and Query Delay Execution","mainEntityOfPage":{"@type":"WebPage","@id":"https://hocaron.github.io/dead-lock-by-fk/"},"url":"https://hocaron.github.io/dead-lock-by-fk/"}</script>
+<!-- End Jekyll SEO tag -->
+
+
+  <!-- CSS -->
+  <link rel="stylesheet" href="/assets/main.css">
+  <link rel="stylesheet" href="../assets/main.js">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Libre+Baskerville:400,400i,700">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.11.1/css/all.min.css" />
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon-16x16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/assets/apple-touch-icon.png">
+
+  <!-- RSS -->
+  <link type="application/atom+xml" rel="alternate" href="https://hocaron.github.io/feed.xml" title="public var hocaron" />
+
+  <!-- Google Analytics-->
+  
+  <script>
+  window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+  ga('create', 'UA—XXXXXXXX-X', 'auto');
+  ga('send', 'pageview');
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+  
+
+  <!-- JavaScript -->
+  <script src="https://code.jquery.com/jquery-1.12.4.js"></script>
+  <script type="text/javascript" src="../assets/main.js"></script>
+
+  <!-- SEO for Polyglot -->
+  
+</head>
+
+
+<body>
+<div>
+  
+
+
+
+
+<nav class="nav">
+  <div class="nav-container">
+    <a href="/">
+      <h2 class="nav-title">public var hocaron</h2>
+    </a>
+    <ul>
+      <li class="selected">
+      <a href="/">Posts</a>
+      </li>
+      <li >
+        <a href="/series">Series</a>
+      </li>
+      <li >
+        <a href="/about">About</a>
+      </li>
+
+      <li>
+        
+        
+        
+        <a class="lang "
+           href="
+                /ko/dead-lock-by-fk/
+              ">
+          KOR
+          |
+        </a>
+        
+        
+        
+        <a class="lang active"
+           href="
+                /dead-lock-by-fk/
+              ">
+          ENG
+          
+        </a>
+        
+      </li>
+
+    </ul>
+  </div>
+</nav>
+
+
+  <main>
+    <div class="post">
+  <div class="post-info">
+<!--    <span>Written by</span>-->
+<!--    -->
+<!--        Hocaron-->
+<!--    -->
+
+    
+      <br>
+      <span>on&nbsp;</span><time datetime="2023-05-22 00:00:00 +0000">May 22, 2023</time>
+    
+  </div>
+
+  <h1 class="post-title">[Troubleshooting - DB] Foreign Key, Deadlock, and Query Delay Execution</h1>
+<!--  <div class="post-line"></div>-->
+  <article class="post-article">
+    <div class="toc">
+      <ul><li><a href="#foreign-key-and-deadlock">Foreign Key and Deadlock</a></li><li><a href="#reproducing-deadlock-situations">Reproducing Deadlock Situations</a><ul><li><a href="#preparation-steps">Preparation Steps</a></li><li><a href="#now-lets-cause-a-deadlock">Now, Let’s Cause a Deadlock</a></li><li><a href="#if-a-child-row-insert-and-a-parent-row-update-are-performed-in-two-sessions-a-deadlock-occurs-">If a child row insert and a parent row update are performed in two sessions, a deadlock occurs 💣</a></li><li><a href="#if-a-parent-row-update-and-a-child-row-insert-are-performed-in-two-sessions-a-duplicate-key-error-occurs-instead-of-a-deadlock">If a parent row update and a child row insert are performed in two sessions, a duplicate key error occurs instead of a deadlock</a></li></ul></li><li><a href="#analyzing-the-logic-causing-deadlock-in-production">Analyzing the Logic Causing Deadlock in Production</a><ul><li><a href="#if-a-child-row-insert-and-a-parent-row-update-are-performed-in-two-sessions-a-deadlock-occurs--1">If a child row insert and a parent row update are performed in two sessions, a deadlock occurs 💣</a></li></ul></li><li><a href="#understanding-the-cause-and-exploring-solutions-to-deadlock">Understanding the Cause and Exploring Solutions to Deadlock</a><ul><li><a href="#-first-attempt-adjust-logic-to-perform-parent-row-update-before-child-row-insert-to-cause-a-duplicate-key-error">❎ First Attempt: Adjust Logic to Perform Parent Row Update Before Child Row Insert to Cause a Duplicate Key Error</a></li><li><a href="#hibernate-query-execution-order">Hibernate Query Execution Order</a></li><li><a href="#-second-attempt-use-flush-after-parent-row-update-to-ensure-query-execution-order">❎ Second Attempt: Use <code class="language-plaintext highlighter-rouge">flush()</code> After Parent Row Update to Ensure Query Execution Order</a></li><li><a href="#-third-attempt-remove-foreign-key-from-the-child-table">✅ Third Attempt: Remove Foreign Key from the Child Table</a></li><li><a href="#not-defeated-yet">Not Defeated Yet…</a></li></ul></li><li><a href="#summary">Summary</a><ul><li><a href="#for-the-record">For the Record</a></li></ul></li></ul>
+
+    </div>
+    <h2 id="foreign-key-and-deadlock">Foreign Key and Deadlock</h2>
+<p><strong>Deadlock</strong> occurs when two or more processes are each waiting for the other to release a resource, resulting in a situation where none of the processes can proceed.<br />
+<img src="https://velog.velcdn.com/images/haron/post/33d1e1aa-b838-40e9-bbbd-af4480a0d5fe/image.png" alt="Deadlock diagram" /><br />
+In this scenario, P1 waits for the resource held by P2, P2 waits for the resource held by P3, and so on, until the last process Pn waits for the resource held by P1, creating a circular wait and causing a deadlock.</p>
+
+<p><strong>Foreign Key</strong> is a key used to link two tables together. The table containing the foreign key is called the child table, and the table referenced by the foreign key is called the parent table.</p>
+
+<blockquote>
+  <p>In “Real MySQL” chapter 3, it states:
+“Foreign keys can cause deadlocks as they require checking for data in both the parent and child tables, propagating locks across multiple tables. Hence, they are rarely used in practice.”</p>
+</blockquote>
+
+<p><img src="https://velog.velcdn.com/images/haron/post/9cb67c04-19fc-4701-98c1-b6a45971eaa9/image.png" alt="Locks propagation" /><br />
+Oh… Locks propagate across multiple tables?!!</p>
+
+<h2 id="reproducing-deadlock-situations">Reproducing Deadlock Situations</h2>
+<h3 id="preparation-steps">Preparation Steps</h3>
+
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">parent</span>
+<span class="p">(</span>
+    <span class="n">id</span>             <span class="nb">bigint</span>        <span class="k">not</span> <span class="k">null</span> <span class="k">primary</span> <span class="k">key</span><span class="p">,</span>
+    <span class="n">name</span>           <span class="nb">varchar</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span>  <span class="k">null</span><span class="p">,</span>
+    <span class="n">updated_at</span>     <span class="nb">datetime</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span>   <span class="k">null</span>
+<span class="p">);</span>
+
+<span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">child</span>
+<span class="p">(</span>
+    <span class="n">id</span>           <span class="nb">bigint</span>          <span class="k">not</span> <span class="k">null</span> <span class="k">primary</span> <span class="k">key</span><span class="p">,</span>
+    <span class="n">name</span>         <span class="nb">varchar</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span>    <span class="k">null</span><span class="p">,</span>
+    <span class="n">parent_id</span>    <span class="nb">bigint</span>          <span class="k">null</span><span class="p">,</span>
+    <span class="k">CONSTRAINT</span> <span class="n">parent_id_unique</span> <span class="k">UNIQUE</span> <span class="p">(</span><span class="n">parent_id</span><span class="p">),</span>
+    <span class="k">CONSTRAINT</span> <span class="n">child_fk</span> <span class="k">FOREIGN</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">parent_id</span><span class="p">)</span> <span class="k">REFERENCES</span> <span class="n">parent</span> <span class="p">(</span><span class="n">id</span><span class="p">)</span>
+<span class="p">);</span>
+
+<span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">child_index</span>
+<span class="p">(</span>
+    <span class="n">id</span>           <span class="nb">bigint</span>          <span class="k">not</span> <span class="k">null</span> <span class="k">primary</span> <span class="k">key</span><span class="p">,</span>
+    <span class="n">name</span>         <span class="nb">varchar</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span>    <span class="k">null</span><span class="p">,</span>
+    <span class="n">parent_id</span>    <span class="nb">bigint</span>          <span class="k">null</span><span class="p">,</span>
+    <span class="k">CONSTRAINT</span> <span class="n">child_index_fk</span> <span class="k">FOREIGN</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">parent_id</span><span class="p">)</span> <span class="k">REFERENCES</span> <span class="n">parent</span> <span class="p">(</span><span class="n">id</span><span class="p">)</span>
+<span class="p">);</span>
+<span class="k">CREATE</span> <span class="k">INDEX</span> <span class="n">parent_id</span> <span class="k">ON</span> <span class="n">child_index</span> <span class="p">(</span><span class="n">parent_id</span><span class="p">);</span>
+
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">parent</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">'parent_1'</span><span class="p">,</span> <span class="n">NOW</span><span class="p">());</span>
+</code></pre></div></div>
+<ol>
+  <li>Create the child table with a foreign key/unique key referencing the parent table’s id.</li>
+  <li>Create the child_index table with a foreign key/index referencing the parent table’s id.</li>
+  <li>Insert test data into the parent table.</li>
+</ol>
+
+<h3 id="now-lets-cause-a-deadlock">Now, Let’s Cause a Deadlock</h3>
+<h3 id="if-a-child-row-insert-and-a-parent-row-update-are-performed-in-two-sessions-a-deadlock-occurs-">If a child row insert and a parent row update are performed in two sessions, a deadlock occurs 💣</h3>
+<p><img src="https://velog.velcdn.com/images/haron/post/64f10100-a470-43a9-af95-c4a372b5bd22/image.png" alt="Deadlock situation" /></p>
+
+<table>
+  <thead>
+    <tr>
+      <th>TX1</th>
+      <th>TX2</th>
+      <th>lock</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>BEGIN ;  <br /> INSERT INTO child VALUES (1, ‘child1’, 1);</td>
+      <td> </td>
+      <td>(1) child X, REC_NOT_GAP Lock, parent S Lock</td>
+    </tr>
+    <tr>
+      <td> </td>
+      <td>BEGIN ;  <br /> INSERT INTO child VALUES (1, ‘child1’, 1);</td>
+      <td>(2) child X Lock waiting, parent S Lock</td>
+    </tr>
+    <tr>
+      <td>UPDATE parent SET name = ‘newParent’ WHERE id = 1;</td>
+      <td> </td>
+      <td>(3)</td>
+    </tr>
+    <tr>
+      <td> </td>
+      <td>Deadlock found when trying to get lock; try restarting transaction</td>
+      <td>(3) parent X lock required, but parent is in S lock in (2) <br /> To resolve (3), (2) needs to be resolved <br /> -&gt; To resolve (2), TX1 commit is required <br /> -&gt; To commit TX1, (3) needs to be resolved <br /> -&gt; Deadlock occurs</td>
+    </tr>
+  </tbody>
+</table>
+
+<p><img src="https://velog.velcdn.com/images/haron/post/609d3b4c-6e3d-4743-af14-5449b7b730fe/image.jpeg" alt="Deadlock explanation" /></p>
+
+<blockquote>
+  <p>When performing a write query on the child table, the foreign key constraint causes the parent’s lock state to be checked. If there’s no issue, the query is executed, and to maintain consistency, a shared lock is placed on the corresponding row in the parent table.</p>
+</blockquote>
+
+<blockquote>
+  <p><strong>Shared Lock (S Lock)</strong><br />
+A shared lock, also known as a read lock, allows read operations (SELECT) on the locked data but prohibits write operations. Other transactions can acquire a shared lock on the same data, but cannot acquire an exclusive lock. This ensures that the data cannot be modified while it’s being read, maintaining transaction integrity.</p>
+</blockquote>
+
+<blockquote>
+  <p><strong>Exclusive Lock (X Lock)</strong><br />
+An exclusive lock, also known as a write lock, allows both read and write operations for the transaction that holds the lock. Other transactions cannot perform any operations (read or write) on the locked data. This guarantees exclusive access to the locked data for the transaction holding the lock.</p>
+</blockquote>
+
+<h3 id="if-a-parent-row-update-and-a-child-row-insert-are-performed-in-two-sessions-a-duplicate-key-error-occurs-instead-of-a-deadlock">If a parent row update and a child row insert are performed in two sessions, a duplicate key error occurs instead of a deadlock</h3>
+<p><img src="https://velog.velcdn.com/images/haron/post/f36e285b-25f9-42f7-a233-7864a0ad9244/image.png" alt="Duplicate key error" /><br />
+If the parent row is updated first, a deadlock does not occur. The duplicate key error is an expected behavior due to service-specific requirements.</p>
+
+<h2 id="analyzing-the-logic-causing-deadlock-in-production">Analyzing the Logic Causing Deadlock in Production</h2>
+<ul>
+  <li>The service uses JPA, so let’s check with the <code class="language-plaintext highlighter-rouge">show-sql</code> option.
+    <div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">SELECT</span> <span class="o">*</span> <span class="k">from</span> <span class="n">parent</span> <span class="k">WHERE</span> <span class="n">id</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">child</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">'child_1'</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span>
+<span class="k">DELETE</span> <span class="k">FROM</span> <span class="n">child_index</span> <span class="k">WHERE</span> <span class="n">parent_id</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">child_index</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">'child_index_1'</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span>
+<span class="k">UPDATE</span> <span class="n">parent</span> <span class="k">SET</span>  <span class="n">updated_at</span> <span class="o">=</span> <span class="n">NOW</span><span class="p">()</span> <span class="k">WHERE</span> <span class="n">id</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+</code></pre></div>    </div>
+    <p>(Tables and columns are simplified versions)</p>
+  </li>
+</ul>
+
+<h3 id="if-a-child-row-insert-and-a-parent-row-update-are-performed-in-two-sessions-a-deadlock-occurs--1">If a child row insert and a parent row update are performed in two sessions, a deadlock occurs 💣</h3>
+<p><img src="https://velog.velcdn.com/images/haron/post/b5700769-98a0-45f6-9858-2594d362f922/image.png" alt="Deadlock diagram" /></p>
+
+<ul>
+  <li>The reason for execution in two sessions is due to multiple simultaneous requests from the front end 🖱🤏🖱🤏.</li>
+  <li>It’s curious that this issue only occurs with this specific button, while other buttons do not cause deadlocks 🤔.</li>
+</ul>
+
+<h2 id="understanding-the-cause-and-exploring-solutions-to-deadlock">Understanding the Cause and Exploring Solutions to Deadlock</h2>
+
+<h3 id="-first-attempt-adjust-logic-to-perform-parent-row-update-before-child-row-insert-to-cause-a-duplicate-key-error">❎ First Attempt: Adjust Logic to Perform Parent Row Update Before Child Row Insert to Cause a Duplicate Key Error</h3>
+<div class="language-java highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="nd">@Transactional</span>
+  <span class="kd">public</span> <span class="kt">void</span> <span class="nf">createChildAndChildIndex</span> <span class="o">(</span><span class="kt">long</span> <span class="n">parentId</span><span class="o">)</span> <span class="o">{</span>
+
+    <span class="kt">var</span> <span class="n">parent</span> <span class="o">=</span> <span class="n">parentRepository</span><span class="o">.</span><span class="na">findById</span><span class="o">(</span><span class="n">parentId</span><span class="o">);</span>
+    <span class="c1">// Update parent row</span>
+    <span class="n">parent</span><span class="o">.</span><span class="na">setUpdatedAt</span><span class="o">(</span><span class="nc">LocalDateTime</span><span class="o">.</span><span class="na">now</span><span class="o">());</span>
+    
+    <span class="c1">// Insert child row</span>
+    <span class="n">childRepository</span><span class="o">.</span><span class="na">save</span><span class="o">(</span><span class="k">new</span> <span class="nc">Child</span><span class="o">(</span><span class="err">'</span><span class="n">child_1</span><span class="err">'</span><span class="o">,</span> <span class="n">parent</span><span class="o">));</span>
+    
+    <span class="n">childIndexRepository</span><span class="o">.</span><span class="na">deleteByParent</span><span class="o">(</span><span class="n">parent</span><span class="o">);</span>
+    <span class="n">childIndexRepository</span><span class="o">.</span><span class="na">save</span><span class="o">(</span><span class="k">new</span> <span class="n">Child_Index</span><span class="o">(</span><span class="err">'</span><span class="n">child_index_1</span><span class="err">'</span><span class="o">,</span> <span class="n">parent</span><span class="o">));</span>
+
+  <span class="o">}</span>
+</code></pre></div></div>
+<p>However, queries are still executed in the order: child row insert → parent row update, causing deadlocks. 😇</p>
+
+<h3 id="hibernate-query-execution-order">Hibernate Query Execution Order</h3>
+<p>Although it is known that JPA’s write-behind strategy defers query execution until the transaction commits, there is an order of execution.</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>OrphanRemovalAction
+AbstractEntityInsertAction
+EntityUpdateAction
+QueuedOperationCollectionAction
+CollectionRemoveAction
+CollectionUpdateAction
+CollectionRecreateAction
+EntityDeleteAction
+
+1. Inserts, in the order they were performed
+2. Updates
+3. Deletion of collection elements
+4. Insertion of collection elements
+5. Deletes, in the order they were performed
+</code></pre></div></div>
+<p>FYI: <a href="https://docs.jboss.org/hibernate/orm/6.1/javadocs/org/hibernate/event/internal/AbstractFlushingEventListener.html#performExecutions(org.hibernate.event.spi.EventSource)">Hibernate Query Execution Order</a></p>
+
+<blockquote>
+  <p><strong>What is a Foreign Key Constraint?</strong>
+When inserting data into a table with a foreign key, the referenced table must contain the actual data being referenced. This ensures data integrity by preventing references to non-existent data. This is likely why inserts are executed first!</p>
+</blockquote>
+
+<p>The reason the logic still results in a child row insert before a parent row update is due to the write-behind strategy, where inserts are prioritized over updates.</p>
+
+<h3 id="-second-attempt-use-flush-after-parent-row-update-to-ensure-query-execution-order">❎ Second Attempt: Use <code class="language-plaintext highlighter-rouge">flush()</code> After Parent Row Update to Ensure Query Execution Order</h3>
+<div class="language-java highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="nd">@Transactional</span>
+  <span class="kd">public</span> <span class="kt">void</span> <span class="nf">createParent</span> <span class="o">(</span><span class="kt">long</span> <span class="n">parentId</span><span class="o">)</span> <span class="o">{</span>
+
+    <span class="kt">var</span> <span class="n">parent</span> <span class="o">=</span> <span class="n">parentRepository</span><span class="o">.</span><span class="na">findById</span><span class="o">(</span><span class="n">parentId</span><span class="o">);</span>
+    <span class="c1">// Update parent row</span>
+    <span class="n">parent</span><span class="o">.</span><span class="na">setUpdatedAt</span><span class="o">(</span><span class="nc">LocalDateTime</span><span class="o">.</span><span class="na">now</span><span class="o">());</span>
+    <span class="c1">// Flush after parent row update</span>
+    <span class="n">parentRepository</span><span class="o">.</span><span class="na">flush</span><span class="o">();</span>
+    
+    <span class="c1">// Insert child row</span>
+    <span class="n">childRepository</span><span class="o">.</span><span class="na">save</span><span class="o">(</span><span class="k">new</span> <span class="nc">Child</span><span class="o">(</span><span class="err">'</span><span class="n">child_1</span><span class="err">'</span><span class="o">,</span> <span class="n">parent</span><span class="o">));</span>
+    
+    <span class="n">childIndexRepository</span><span class="o">.</span><span class="na">deleteByParent</span><span class="o">(</span><span class="n">parent</span><span class="o">);</span>
+    <span class="n">childIndexRepository</span><span class="o">.</span><span class="na">save</span><span class="o">(</span><span class="k">new</span> <span class="n">Child_Index</span><span class="o">(</span><span class="err">'</span><span class="n">child_index_1</span><span class="err">'</span><span class="o">,</span> <span class="n">parent</span><span class="o">));</span>
+
+  <span class="o">}</span>
+</code></pre></div></div>
+
+<p>Queries are executed as intended!</p>
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">SELECT</span> <span class="o">*</span> <span class="k">from</span> <span class="n">parent</span> <span class="k">WHERE</span> <span class="n">id</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+<span class="k">UPDATE</span> <span class="n">parent</span> <span class="k">SET</span>  <span class="n">updated_at</span> <span class="o">=</span> <span class="n">NOW</span><span class="p">()</span> <span class="k">WHERE</span> <span class="n">id</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">child</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">'child_1'</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span>
+<span class="k">DELETE</span> <span class="k">FROM</span> <span class="n">child_index</span> <span class="k">WHERE</span> <span class="n">parent_id</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">child_index</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">'child_index_1'</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span>
+</code></pre></div></div>
+<ul>
+  <li>However, there are concerns about potential side effects of <code class="language-plaintext highlighter-rouge">flush()</code> and confusion for future developers seeing an unexpected <code class="language-plaintext highlighter-rouge">flush()</code> call.</li>
+</ul>
+
+<h3 id="-third-attempt-remove-foreign-key-from-the-child-table">✅ Third Attempt: Remove Foreign Key from the Child Table</h3>
+<p>🤔 How long does it take to remove a foreign key from a table with 2,288,112 rows?!</p>
+
+<ul>
+  <li>The deadlock occurs because a change in a child row also causes a shared lock on the parent row. Removing the root cause might solve the problem.</li>
+  <li>Concerned about potential service downtime during foreign key removal, we tested it. On a table with 54,973 rows, it took only 14 ms.</li>
+</ul>
+
+<p><img src="https://velog.velcdn.com/images/haron/post/b66d04a1-8e93-4f24-a8bb-f135946f7669/image.png" alt="Foreign key removal time" /></p>
+<ul>
+  <li>After discussing within the team, we removed the foreign key without service interruption. Monitoring showed that after removing the foreign key, <code class="language-plaintext highlighter-rouge">SQLTransactionRollbackException</code> (deadlock) was replaced by <code class="language-plaintext highlighter-rouge">DataIntegrityViolationException</code> (duplicate key).</li>
+</ul>
+
+<p><img src="https://velog.velcdn.com/images/haron/post/fa8c8a3e-ad61-4977-b1ff-585b0d262293/image.png" alt="Post foreign key removal" /></p>
+
+<h3 id="not-defeated-yet">Not Defeated Yet…</h3>
+<p><a href="https://velog.io/@haron/%ED%8A%B8%EB%9F%AC%EB%B8%94%EC%8A%88%ED%8C%85-DB-%EC%9D%B8%EB%8D%B1%EC%8A%A4Index%EC%99%80-%EB%8D%B0%EB%93%9C%EB%9D%BDDeadLock-in8ryzsm">The Index Was Waiting for Me…</a></p>
+
+<h2 id="summary">Summary</h2>
+<ol>
+  <li>When a foreign key is present, a change in a child row causes a shared lock on the parent row.</li>
+  <li>There is an execution order for JPA’s write-behind strategy.</li>
+  <li>The time taken to remove an FK key is shorter than expected.</li>
+</ol>
+
+<h3 id="for-the-record">For the Record</h3>
+<details>
+<summary>SHOW ENGINE innodb STATUS;</summary>
+- SHOW ENGINE innodb STATUS;
+  LOCK WAIT 4 lock struct(s), heap size 1128, 2 row lock(s), undo log entries 1
+  *** (1) HOLDS THE LOCK(S):
+
+RECORD LOCKS space id 148 page no 4 n bits 72 index PRIMARY of table `jpa`.`parent` trx id 12534 lock mode S locks rec but not gap
+
+Record lock, heap no 2 PHYSICAL RECORD: n_fields 4; compact format; info bits 0
+
+*** (1) WAITING FOR THIS LOCK TO BE GRANTED:
+RECORD LOCKS space id 149 page no 5 n bits 72 index parent_id_unique of table `jpa`.`child` trx id 12534 lock mode S waiting
+Record lock, heap no 2 PHYSICAL RECORD: n_fields 2; compact format; info bits 0
+
+*** (2) TRANSACTION:
+
+TRANSACTION 12533, ACTIVE 13 sec starting index read
+
+mysql tables in use 1, locked 1
+
+LOCK WAIT 6 lock struct(s), heap size 1128, 3 row lock(s), undo log entries 1
+
+MySQL thread id 128, OS thread handle 6143324160, query id 12894 localhost 127.0.0.1 root updating
+
+/* ApplicationName=DataGrip 2022.3.2 */ UPDATE parent SET name = 'newParent' WHERE id = 1
+
+*** (2) HOLDS THE LOCK(S):
+RECORD LOCKS space id 149 page no 5 n bits 72 index parent_id_unique of table `jpa`.`child` trx id 12533 lock_mode X locks rec but not gap
+Record lock, heap no 2 PHYSICAL RECORD: n_fields 2; compact format; info bits 0
+
+*** (2) WAITING FOR THIS LOCK TO BE GRANTED:
+RECORD LOCKS space id 148 page no 4 n bits 72 index PRIMARY of table `jpa`.`parent` trx id 12533 lock_mode X locks rec but not gap waiting
+
+Record lock, heap no 2 PHYSICAL RECORD: n_fields 4; compact format; info bits 0
+</details>
+
+  </article>
+</div>
+
+<div class="pagination">
+  
+    <a href="/dead-lock-by-index/" class="left arrow">&#8592;</a>
+  
+  
+
+  
+
+  <a href="#" class="top">Top</a>
+</div>
+
+<script src="../assets/js/toc.js"></script>
+
+  </main>
+
+  <footer>
+  <a href="mailto:kkannu0407@gmail.com">
+    <i class="far fa-envelope fa-fw"></i>
+  </a>
+  <a href="https://github.com/hocaron" target="_blank">
+    <i class="fab fa-github fa-fw"></i>
+  </a>
+  <a href="https://www.linkedin.com/in/sunwoo-ho-86b45823a" target="_blank">
+    <i class="fab fa-linkedin fa-fw"></i>
+  </a>
+
+  <br>
+  <span>&copy; 2024 Hocaron</span>
+</footer>
+
+</div>
+</body>
+</html>

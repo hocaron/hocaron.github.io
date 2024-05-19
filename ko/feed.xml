@@ -1,24 +1,482 @@
-<?xml version="1.0" encoding="utf-8"?><feed xmlns="http://www.w3.org/2005/Atom" ><generator uri="https://jekyllrb.com/" version="4.3.3">Jekyll</generator><link href="https://hocaron.github.io/ko/feed.xml" rel="self" type="application/atom+xml" /><link href="https://hocaron.github.io/ko/" rel="alternate" type="text/html" /><updated>2024-05-15T20:13:27+00:00</updated><id>https://hocaron.github.io/feed.xml</id><title type="html">public var hocaron</title><subtitle>Minimal Jekyll theme for storytellers</subtitle><author><name>Hocaron</name><email>kkannu0407@gmail.com</email></author><entry><title type="html">Introducing Tale</title><link href="https://hocaron.github.io/ko/2017-03-29/introducing-tale" rel="alternate" type="text/html" title="Introducing Tale" /><published>2017-03-29T00:00:00+00:00</published><updated>2017-03-29T00:00:00+00:00</updated><id>https://hocaron.github.io/2017-03-29/introducing-tale</id><content type="html" xml:base="https://hocaron.github.io/2017-03-29/introducing-tale"><![CDATA[<p>Tale is a minimal <a href="https://jekyllrb.com/">Jekyll</a> theme curated for storytellers. It is designed and developed by <a href="https://github.com/chesterhow/">myself</a> for a friend who writes short stories.<!--more--></p>
+<?xml version="1.0" encoding="utf-8"?><feed xmlns="http://www.w3.org/2005/Atom" ><generator uri="https://jekyllrb.com/" version="4.3.3">Jekyll</generator><link href="https://hocaron.github.io/ko/feed.xml" rel="self" type="application/atom+xml" /><link href="https://hocaron.github.io/ko/" rel="alternate" type="text/html" /><updated>2024-05-19T06:54:50+00:00</updated><id>https://hocaron.github.io/feed.xml</id><title type="html">public var hocaron</title><subtitle>Minimal Jekyll theme for storytellers</subtitle><author><name>Hocaron</name><email>kkannu0407@gmail.com</email></author><entry xml:lang="ko"><title type="html">[트러블슈팅 - DB] 인덱스(Index)와 데드락(DeadLock)</title><link href="https://hocaron.github.io/ko/dead-lock-by-index/" rel="alternate" type="text/html" title="[트러블슈팅 - DB] 인덱스(Index)와 데드락(DeadLock)" /><published>2023-05-23T00:00:00+00:00</published><updated>2023-05-23T00:00:00+00:00</updated><id>https://hocaron.github.io/dead-lock-by-index</id><content type="html" xml:base="https://hocaron.github.io/dead-lock-by-index/"><![CDATA[<p><img src="https://velog.velcdn.com/images/haron/post/329afb75-8be4-47ed-ab19-cb087ec1a934/image.png" alt="" /></p>
 
-<h2 id="tale-features">Tale features</h2>
+<p>역시 <a href="https://velog.io/@haron/%EC%99%B8%EB%9E%98%ED%82%A4Foreign-Key%EC%99%80-%EB%8D%B0%EB%93%9C%EB%9D%BDDeadLock-%EA%B7%B8%EB%A6%AC%EA%B3%A0-%EC%BF%BC%EB%A6%AC-%EC%A7%80%EC%97%B0-%EC%8B%A4%ED%96%89-eruedsy4">해치웠나</a>를 외치면 안 되는 것인가… 또 울기 시작한 페페… (그만 울어잇!)
+의미있는 경험으로 남기기위해 기록해보자.
+<img src="https://velog.velcdn.com/images/haron/post/1687c152-873d-425f-96f9-174735a9c262/image.png" alt="" /></p>
+
+<h2 id="데드락이-발생하는-상황-다시-재현">데드락이 발생하는 상황 다시 재현</h2>
+
+<h3 id="현재-테이블-상태">현재 테이블 상태</h3>
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">parent</span>
+<span class="p">(</span>
+    <span class="n">id</span>             <span class="nb">bigint</span>        <span class="k">not</span> <span class="k">null</span> <span class="k">primary</span> <span class="k">key</span><span class="p">,</span>
+    <span class="n">name</span>           <span class="nb">varchar</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span>  <span class="k">null</span><span class="p">,</span>
+    <span class="n">updated_at</span>     <span class="nb">datetime</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span>   <span class="k">null</span>
+<span class="p">);</span>
+
+<span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">child</span>
+<span class="p">(</span>
+    <span class="n">id</span>           <span class="nb">bigint</span>          <span class="k">not</span> <span class="k">null</span> <span class="k">primary</span> <span class="k">key</span><span class="p">,</span>
+    <span class="n">name</span>         <span class="nb">varchar</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span>    <span class="k">null</span><span class="p">,</span>
+    <span class="n">parent_id</span>    <span class="nb">bigint</span>          <span class="k">null</span><span class="p">,</span>
+    <span class="k">CONSTRAINT</span> <span class="n">parent_id_unique</span> <span class="k">UNIQUE</span> <span class="p">(</span><span class="n">parent_id</span><span class="p">)</span>
+<span class="p">);</span>
+
+
+<span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">child_index</span>
+<span class="p">(</span>
+    <span class="n">id</span>           <span class="nb">bigint</span>          <span class="k">not</span> <span class="k">null</span> <span class="k">primary</span> <span class="k">key</span><span class="p">,</span>
+    <span class="n">name</span>         <span class="nb">varchar</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span>    <span class="k">null</span><span class="p">,</span>
+    <span class="n">parent_id</span>    <span class="nb">bigint</span>          <span class="k">null</span><span class="p">,</span>
+<span class="p">);</span>
+<span class="k">CREATE</span> <span class="k">INDEX</span> <span class="n">parent_id</span> <span class="k">ON</span> <span class="n">child_index</span> <span class="p">(</span><span class="n">parent_id</span><span class="p">);</span>
+
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">parent</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">'parent_1'</span><span class="p">,</span> <span class="n">NOW</span><span class="p">());</span>
+</code></pre></div></div>
+<ol>
+  <li>parent 테이블의 id를 index로 가지고 있는 child_index 테이블 생성(외래키는 운영에서 삭제되어서 테스트시 고려하지 않습니다)</li>
+  <li>parent 테이블의 id를 유니크 키로 가지고 있는 child 테이블 생성(마찬가지로 외래키 고려하지 않습니다.)</li>
+  <li>parent 테이블에 테스트 데이터 적재</li>
+</ol>
+
+<h3 id="그럼-이제-데드락을-발생시켜-보자">그럼 이제 데드락을 발생시켜 보자</h3>
+<h3 id="index-걸려있는-row-delete---index-걸려있는-자식-row-insert가-두개의-세션에서-수행되면-데드락이-발생-">index 걸려있는 row delete →  index 걸려있는 자식 row insert가 두개의 세션에서 수행되면, 데드락이 발생 💣</h3>
+<p><img src="https://velog.velcdn.com/images/haron/post/bc47166e-b1b7-4f30-ac1f-09932cb38ff7/image.png" alt="" /></p>
+
+<table>
+  <thead>
+    <tr>
+      <th>TX1</th>
+      <th>TX2</th>
+      <th>lock</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>BEGIN ;  <br /> DELETE FROM child_index WHERE parent_id = 2;</td>
+      <td> </td>
+      <td>(1) child X Lock 인데, TX2에서 X Lock 획득 가능할까 🤔</td>
+    </tr>
+    <tr>
+      <td> </td>
+      <td>BEGIN ;  <br /> DELETE FROM child_index WHERE parent_id = 2;</td>
+      <td>(2) child X Lock</td>
+    </tr>
+    <tr>
+      <td>INSERT INTO child_index VALUES (‘1’, ‘name2’, 2);</td>
+      <td> </td>
+      <td>(3) child X,INSERT_INTENTION Lock 대기</td>
+    </tr>
+    <tr>
+      <td> </td>
+      <td>INSERT INTO child_index VALUES (‘2’, ‘name2’, 2);</td>
+      <td>(4) child X,INSERT_INTENTION Lock 대기</td>
+    </tr>
+    <tr>
+      <td> </td>
+      <td>Deadlock found when trying to get lock; try restarting transaction</td>
+      <td>(4) child X lock 이 필요하지만, (2) 에서 child X lock 상태 <br /> (4) 해소를 위해서 (3) 해소 필요 <br /> -&gt; (3) 해소 위해서 TX2 커밋 필요 <br /> -&gt; TX2 커밋하려면 (4) 해소 필요 <br /> -&gt; 데드락 발생</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="운영환경에서-데드락이-발생하는-로직을-살펴보자">운영환경에서 데드락이 발생하는 로직을 살펴보자</h2>
+
+<h3 id="index-걸려있는-row-delete---index-걸려있는-자식-row-insert가-두개의-세션에서-수행되면-데드락이-발생--1">index 걸려있는 row delete →  index 걸려있는 자식 row insert가 두개의 세션에서 수행되면, 데드락이 발생 💣</h3>
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">SELECT</span> <span class="o">*</span> <span class="k">from</span> <span class="n">parent</span> <span class="k">WHERE</span> <span class="n">id</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">child</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">'child_1'</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span>
+<span class="k">DELETE</span> <span class="k">FROM</span> <span class="n">child_index</span> <span class="k">WHERE</span> <span class="n">parent_id</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">child_index</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">'child_index_1'</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span>
+<span class="k">UPDATE</span> <span class="n">parent</span> <span class="k">SET</span>  <span class="n">updated_at</span> <span class="o">=</span> <span class="n">NOW</span><span class="p">()</span> <span class="k">WHERE</span> <span class="n">id</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+</code></pre></div></div>
+
+<div class="language-java highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="nd">@Transactional</span>
+  <span class="kd">public</span> <span class="kt">void</span> <span class="nf">createChildAndChildIndex</span> <span class="o">(</span><span class="kt">long</span> <span class="n">parentId</span><span class="o">)</span> <span class="o">{</span>
+
+    <span class="kt">var</span> <span class="n">parent</span> <span class="o">=</span> <span class="n">parentRepository</span><span class="o">.</span><span class="na">findById</span><span class="o">(</span><span class="n">parentId</span><span class="o">);</span>
+    
+    <span class="n">childIndexRepository</span><span class="o">.</span><span class="na">deleteByParent</span><span class="o">(</span><span class="n">parent</span><span class="o">);</span>
+    <span class="n">childIndexRepository</span><span class="o">.</span><span class="na">save</span><span class="o">(</span><span class="k">new</span> <span class="n">Child_Index</span><span class="o">(</span><span class="err">'</span><span class="n">child_index_1</span><span class="err">'</span><span class="o">,</span> <span class="n">parent</span><span class="o">));</span>
+
+  <span class="o">}</span>
+</code></pre></div></div>
 <ul>
-  <li>Compatible with GitHub Pages</li>
-  <li>Responsive design (looks just as good on mobile)</li>
-  <li>Syntax highlighting, with the help of Pygments</li>
-  <li>Markdown and HTML text formatting</li>
-  <li>Pagination of posts</li>
-  <li>Sticky posts</li>
-  <li>Tags</li>
-  <li>Excerpt management</li>
-  <li>Disqus comments</li>
+  <li>한가지 신기한 점은 delete 하려는 데이터가 없을 때, 데드락이 발생한다.</li>
+  <li>delete 하려는 데이터가 있는 경우에는 같은 로직을 수행하면 락을 잡을 때까지 기다리게 된다.</li>
 </ul>
 
-<p>Head over to the <a href="/ko/2017-03-16/example-content">Example Content</a> post for a showcase of Tale’s text formatting features.</p>
+<h2 id="원인은-알았고-서버에서-데드락을-해결할-수-있는-방법을-고민해보자">원인은 알았고, 서버에서 데드락을 해결할 수 있는 방법을 고민해보자</h2>
+<h3 id="-첫번째-시도-존재하는-경우에만-row-삭제">❎ 첫번째 시도, 존재하는 경우에만 row 삭제</h3>
+<div class="language-java highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="nd">@Transactional</span>
+  <span class="kd">public</span> <span class="kt">void</span> <span class="nf">createParent</span> <span class="o">(</span><span class="kt">long</span> <span class="n">parentId</span><span class="o">)</span> <span class="o">{</span>
 
-<h2 id="browser-support">Browser Support</h2>
-<p>Tale works on most if not all modern browsers, including Chrome, Safari and Firefox 👍🏼</p>
+    <span class="kt">var</span> <span class="n">parent</span> <span class="o">=</span> <span class="n">parentRepository</span><span class="o">.</span><span class="na">findById</span><span class="o">(</span><span class="n">parentId</span><span class="o">);</span>
+    
+    <span class="k">if</span><span class="o">(</span><span class="n">childIndexRepository</span><span class="o">.</span><span class="na">findByParent</span><span class="o">(</span><span class="n">parent</span><span class="o">).</span><span class="na">isPresent</span><span class="o">())</span> <span class="o">{</span>
+        <span class="n">childIndexRepository</span><span class="o">.</span><span class="na">deleteByParent</span><span class="o">(</span><span class="n">parent</span><span class="o">);</span>
+    <span class="o">}</span>
+    <span class="n">childIndexRepository</span><span class="o">.</span><span class="na">save</span><span class="o">(</span><span class="k">new</span> <span class="n">Child_Index</span><span class="o">(</span><span class="err">'</span><span class="n">child_index_1</span><span class="err">'</span><span class="o">,</span> <span class="n">parent</span><span class="o">));</span>
+  <span class="o">}</span>
+</code></pre></div></div>
+<ul>
+  <li>무조건 delete 하는 로직으로 인한 배타락은 방지 가능하다.</li>
+  <li>동시 요청시에 childIndexRepository.findByParent 에 데이터가 없는 경우로 분기처리되는 경우, 데이터가 2배로 적재될 수 있다.
+    <ul>
+      <li>300ms 로 쓰레드 sleep() 걸어서 테스트 결과 2배로 쌓이는 것을 확인</li>
+    </ul>
+  </li>
+</ul>
 
-<h2 id="download-or-contribute">Download or Contribute</h2>
-<p>Tale is publicly hosted on GitHub, so go ahead and download or fork it at the <a href="https://github.com/chesterhow/tale">GitHub repository</a>. If you spot any bugs or have any suggestions, feel free to create an issue or make a pull request.</p>
+<h3 id="-두번째-시도-존재하는-경우에만-row-삭제하면서-유니크-조건-추가">✅ 두번째 시도, 존재하는 경우에만 row 삭제하면서 유니크 조건 추가</h3>
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">child_index</span>
+<span class="p">(</span>
+    <span class="n">id</span>           <span class="nb">bigint</span>          <span class="k">not</span> <span class="k">null</span> <span class="k">primary</span> <span class="k">key</span><span class="p">,</span>
+    <span class="n">name</span>         <span class="nb">varchar</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span>    <span class="k">null</span><span class="p">,</span>
+    <span class="n">parent_id</span>    <span class="nb">bigint</span>          <span class="k">null</span><span class="p">,</span>
+    <span class="k">CONSTRAINT</span> <span class="n">parent_id_unique</span> <span class="k">UNIQUE</span> <span class="p">(</span><span class="n">parent_id</span><span class="p">)</span>
+<span class="p">);</span>
+<span class="k">CREATE</span> <span class="k">INDEX</span> <span class="n">parent_id</span> <span class="k">ON</span> <span class="n">child_index</span> <span class="p">(</span><span class="n">parent_id</span><span class="p">);</span>
+</code></pre></div></div>
+<ul>
+  <li>동시 요청시에 childIndexRepository.findByParent 에 데이터가 없는 경우로 분기처리되는 경우, 후에 커밋되어 적재된 데이터는 중복키 에러 처리된다.</li>
+</ul>
 
-<p>Thanks for checking out Tale!</p>]]></content><author><name>Chester</name></author><category term="Tale" /><summary type="html"><![CDATA[Tale is a minimal Jekyll theme curated for storytellers. It is designed and developed by myself for a friend who writes short stories.]]></summary></entry></feed>
+<h3 id="-세번째-시도-redis-에-동시성-제어를-위한-키-추가">❎ 세번째 시도, Redis 에 동시성 제어를 위한 키 추가</h3>
+<ul>
+  <li>간헐적인 데드락이고, 위 서비스에서 Redis를 사용하지 않아 캐시 리소스가 더 클 것 같아 나가리!</li>
+</ul>
+
+<h3 id="-네번째-시도-요청-제한">❎ 네번째 시도, 요청 제한</h3>
+<ul>
+  <li>Bucket4j를 이용해서 클라이언트가 특정 시간 프레임 내에 만들 수 있는 API 호출 수를 제한한다.</li>
+  <li>위 서비스는 서버가 여러대인 경우라서 다른 서버로 동시 요청이 들어가는 경우, 데드락 방지 불가능</li>
+</ul>
+
+<h2 id="정리">정리</h2>
+<ol>
+  <li>데이터가 없는 경우, 삭제 쿼리를 날리면 delete, select 는 가능하지만 insert 시에 락을 기다리게 된다.</li>
+  <li>락이 궁금하다면, <a href="https://dev.mysql.com/doc/refman/8.0/en/innodb-locking.html#innodb-record-locks">MySQL 공식문서 중 InnoDB Lock 메뉴얼</a>을 참고해보자. (예제와 함께 정리가 너무 잘 되어있는 것을 볼 수 있다.)</li>
+</ol>
+
+<h3 id="흥미로운-실험">흥미로운 실험</h3>
+<h4 id="인덱스가-걸린-컬럼-기준으로-쿼리">인덱스가 걸린 컬럼 기준으로 쿼리</h4>
+<ul>
+  <li>데이터가 있는 경우에는, 2번째 트랜잭션에서 delete 시에 락 획득을 기다린다.
+    <div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">BEGIN</span> <span class="p">;</span>
+<span class="k">DELETE</span> <span class="k">FROM</span> <span class="n">child_index</span> <span class="k">WHERE</span> <span class="n">parent_id</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">child_index</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">'child_index_1'</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span>
+<span class="k">COMMIT</span> <span class="p">;</span>
+</code></pre></div>    </div>
+  </li>
+  <li>데이터가 없는 경우에는, 2번째 트랜잭션에서 delete 시에 락 획득이 바로 가능하다.
+    <div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">BEGIN</span> <span class="p">;</span>
+<span class="k">DELETE</span> <span class="k">FROM</span> <span class="n">child_index</span> <span class="k">WHERE</span> <span class="n">parent_id</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">child_index</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">'child_index_1'</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span>
+<span class="k">COMMIT</span> <span class="p">;</span>
+</code></pre></div>    </div>
+    <h4 id="인덱스가-걸리지-않은-컬럼-기준으로-쿼리">인덱스가 걸리지 않은 컬럼 기준으로 쿼리</h4>
+  </li>
+  <li>데이터가 있는 / 없는 경우, 2번째 트랜잭션에서 delete 시에 락 획득을 기다린다.
+    <div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">BEGIN</span> <span class="p">;</span>
+<span class="k">DELETE</span> <span class="k">FROM</span> <span class="n">child_index</span> <span class="k">WHERE</span> <span class="n">name</span> <span class="o">=</span> <span class="s1">'child_index_2'</span><span class="p">;</span>
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">child_index</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">'child_index_1'</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span>
+<span class="k">COMMIT</span> <span class="p">;</span>
+</code></pre></div>    </div>
+  </li>
+</ul>
+
+<h3 id="기록용">기록용</h3>
+<details>
+<summary>SHOW ENGINE innodb STATUS;</summary>
+  *** (1) TRANSACTION:TRANSACTION 13034, ACTIVE 6 sec insertingmysql tables in use 1, locked 1LOCK WAIT 4 lock struct(s), heap size 1128, 3 row lock(s), undo log entries 1MySQL thread id 280, OS thread handle 6136639488, query id 21716 localhost 127.0.0.1 root update/* ApplicationName=DataGrip 2022.3.2 */ insert into child values ('2', 'name2', 2)
+
+*** (1) HOLDS THE LOCK(S):RECORD LOCKS space id 154 page no 4 n bits 72 index PRIMARY of table jpa.child trx id 13034 lock_mode X locks rec but not gapRecord lock, heap no 3 PHYSICAL RECORD: n_fields 5; compact format; info bits 0
+
+*** (1) WAITING FOR THIS LOCK TO BE GRANTED:RECORD LOCKS space id 154 page no 5 n bits 72 index parent_id of table jpa.child trx id 13034 lock_mode X insert intention waitingRecord lock, heap no 1 PHYSICAL RECORD: n_fields 1; compact format; info bits 0
+
+*** (2) TRANSACTION:TRANSACTION 13035, ACTIVE 4 sec insertingmysql tables in use 1, locked 1LOCK WAIT 3 lock struct(s), heap size 1128, 2 row lock(s)MySQL thread id 281, OS thread handle 6135525376, query id 21726 localhost 127.0.0.1 root update/* ApplicationName=DataGrip 2022.3.2 */ insert into child values ('2', 'name2', 2)
+
+*** (2) HOLDS THE LOCK(S):RECORD LOCKS space id 154 page no 5 n bits 72 index parent_id of table jpa.child trx id 13035 lock_mode XRecord lock, heap no 1 PHYSICAL RECORD: n_fields 1; compact format; info bits 0
+
+*** (2) WAITING FOR THIS LOCK TO BE GRANTED:RECORD LOCKS space id 154 page no 4 n bits 72 index PRIMARY of table jpa.child trx id 13035 lock mode S locks rec but not gap waitingRecord lock, heap no 3 PHYSICAL RECORD: n_fields 5; compact format; info bits 0
+
+- SELECT * FROM performance_schema.data_locks;
+
+| INDEX\_NAME | OBJECT\_INSTANCE\_BEGIN | LOCK\_TYPE | LOCK\_MODE | LOCK\_STATUS | LOCK\_DATA |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| null | 4813003272 | TABLE | IX | GRANTED | null |
+| parent\_id | 4823656472 | RECORD | X | GRANTED | supremum pseudo-record |
+| parent\_id | 4823656816 | RECORD | X,INSERT\_INTENTION | GRANTED | supremum pseudo-record |
+| parent\_id | 4823657160 | RECORD | X,GAP | GRANTED | 1, 1 |
+</details>]]></content><author><name>Hocaron</name><email>kkannu0407@gmail.com</email></author><category term="Troubleshooting" /><summary type="html"><![CDATA[역시 해치웠나를 외치면 안 되는 것인가… 또 울기 시작한 페페… (그만 울어잇!) 의미있는 경험으로 남기기위해 기록해보자. 데드락이 발생하는 상황 다시 재현 현재 테이블 상태 CREATE TABLE parent ( id bigint not null primary key, name varchar(255) null, updated_at datetime(6) null ); CREATE TABLE child ( id bigint not null primary key, name varchar(255) null, parent_id bigint null, CONSTRAINT parent_id_unique UNIQUE (parent_id) ); CREATE TABLE child_index ( id bigint not null primary key, name varchar(255) null, parent_id bigint null, ); CREATE INDEX parent_id ON child_index (parent_id); INSERT INTO parent VALUES (1, 'parent_1', NOW()); parent 테이블의 id를 index로 가지고 있는 child_index 테이블 생성(외래키는 운영에서 삭제되어서 테스트시 고려하지 않습니다) parent 테이블의 id를 유니크 키로 가지고 있는 child 테이블 생성(마찬가지로 외래키 고려하지 않습니다.) parent 테이블에 테스트 데이터 적재 그럼 이제 데드락을 발생시켜 보자 index 걸려있는 row delete → index 걸려있는 자식 row insert가 두개의 세션에서 수행되면, 데드락이 발생 💣 TX1 TX2 lock BEGIN ; DELETE FROM child_index WHERE parent_id = 2;   (1) child X Lock 인데, TX2에서 X Lock 획득 가능할까 🤔   BEGIN ; DELETE FROM child_index WHERE parent_id = 2; (2) child X Lock INSERT INTO child_index VALUES (‘1’, ‘name2’, 2);   (3) child X,INSERT_INTENTION Lock 대기   INSERT INTO child_index VALUES (‘2’, ‘name2’, 2); (4) child X,INSERT_INTENTION Lock 대기   Deadlock found when trying to get lock; try restarting transaction (4) child X lock 이 필요하지만, (2) 에서 child X lock 상태 (4) 해소를 위해서 (3) 해소 필요 -&gt; (3) 해소 위해서 TX2 커밋 필요 -&gt; TX2 커밋하려면 (4) 해소 필요 -&gt; 데드락 발생 운영환경에서 데드락이 발생하는 로직을 살펴보자 index 걸려있는 row delete → index 걸려있는 자식 row insert가 두개의 세션에서 수행되면, 데드락이 발생 💣 SELECT * from parent WHERE id = 1; INSERT INTO child VALUES (1, 'child_1', 1); DELETE FROM child_index WHERE parent_id = 1; INSERT INTO child_index VALUES (1, 'child_index_1', 1); UPDATE parent SET updated_at = NOW() WHERE id = 1; @Transactional public void createChildAndChildIndex (long parentId) { var parent = parentRepository.findById(parentId); childIndexRepository.deleteByParent(parent); childIndexRepository.save(new Child_Index('child_index_1', parent)); } 한가지 신기한 점은 delete 하려는 데이터가 없을 때, 데드락이 발생한다. delete 하려는 데이터가 있는 경우에는 같은 로직을 수행하면 락을 잡을 때까지 기다리게 된다. 원인은 알았고, 서버에서 데드락을 해결할 수 있는 방법을 고민해보자 ❎ 첫번째 시도, 존재하는 경우에만 row 삭제 @Transactional public void createParent (long parentId) { var parent = parentRepository.findById(parentId); if(childIndexRepository.findByParent(parent).isPresent()) { childIndexRepository.deleteByParent(parent); } childIndexRepository.save(new Child_Index('child_index_1', parent)); } 무조건 delete 하는 로직으로 인한 배타락은 방지 가능하다. 동시 요청시에 childIndexRepository.findByParent 에 데이터가 없는 경우로 분기처리되는 경우, 데이터가 2배로 적재될 수 있다. 300ms 로 쓰레드 sleep() 걸어서 테스트 결과 2배로 쌓이는 것을 확인 ✅ 두번째 시도, 존재하는 경우에만 row 삭제하면서 유니크 조건 추가 CREATE TABLE child_index ( id bigint not null primary key, name varchar(255) null, parent_id bigint null, CONSTRAINT parent_id_unique UNIQUE (parent_id) ); CREATE INDEX parent_id ON child_index (parent_id); 동시 요청시에 childIndexRepository.findByParent 에 데이터가 없는 경우로 분기처리되는 경우, 후에 커밋되어 적재된 데이터는 중복키 에러 처리된다. ❎ 세번째 시도, Redis 에 동시성 제어를 위한 키 추가 간헐적인 데드락이고, 위 서비스에서 Redis를 사용하지 않아 캐시 리소스가 더 클 것 같아 나가리! ❎ 네번째 시도, 요청 제한 Bucket4j를 이용해서 클라이언트가 특정 시간 프레임 내에 만들 수 있는 API 호출 수를 제한한다. 위 서비스는 서버가 여러대인 경우라서 다른 서버로 동시 요청이 들어가는 경우, 데드락 방지 불가능 정리 데이터가 없는 경우, 삭제 쿼리를 날리면 delete, select 는 가능하지만 insert 시에 락을 기다리게 된다. 락이 궁금하다면, MySQL 공식문서 중 InnoDB Lock 메뉴얼을 참고해보자. (예제와 함께 정리가 너무 잘 되어있는 것을 볼 수 있다.) 흥미로운 실험 인덱스가 걸린 컬럼 기준으로 쿼리 데이터가 있는 경우에는, 2번째 트랜잭션에서 delete 시에 락 획득을 기다린다. BEGIN ; DELETE FROM child_index WHERE parent_id = 1; INSERT INTO child_index VALUES (1, 'child_index_1', 1); COMMIT ; 데이터가 없는 경우에는, 2번째 트랜잭션에서 delete 시에 락 획득이 바로 가능하다. BEGIN ; DELETE FROM child_index WHERE parent_id = 1; INSERT INTO child_index VALUES (1, 'child_index_1', 1); COMMIT ; 인덱스가 걸리지 않은 컬럼 기준으로 쿼리 데이터가 있는 / 없는 경우, 2번째 트랜잭션에서 delete 시에 락 획득을 기다린다. BEGIN ; DELETE FROM child_index WHERE name = 'child_index_2'; INSERT INTO child_index VALUES (1, 'child_index_1', 1); COMMIT ; 기록용 SHOW ENGINE innodb STATUS; *** (1) TRANSACTION:TRANSACTION 13034, ACTIVE 6 sec insertingmysql tables in use 1, locked 1LOCK WAIT 4 lock struct(s), heap size 1128, 3 row lock(s), undo log entries 1MySQL thread id 280, OS thread handle 6136639488, query id 21716 localhost 127.0.0.1 root update/* ApplicationName=DataGrip 2022.3.2 */ insert into child values ('2', 'name2', 2) *** (1) HOLDS THE LOCK(S):RECORD LOCKS space id 154 page no 4 n bits 72 index PRIMARY of table jpa.child trx id 13034 lock_mode X locks rec but not gapRecord lock, heap no 3 PHYSICAL RECORD: n_fields 5; compact format; info bits 0 *** (1) WAITING FOR THIS LOCK TO BE GRANTED:RECORD LOCKS space id 154 page no 5 n bits 72 index parent_id of table jpa.child trx id 13034 lock_mode X insert intention waitingRecord lock, heap no 1 PHYSICAL RECORD: n_fields 1; compact format; info bits 0 *** (2) TRANSACTION:TRANSACTION 13035, ACTIVE 4 sec insertingmysql tables in use 1, locked 1LOCK WAIT 3 lock struct(s), heap size 1128, 2 row lock(s)MySQL thread id 281, OS thread handle 6135525376, query id 21726 localhost 127.0.0.1 root update/* ApplicationName=DataGrip 2022.3.2 */ insert into child values ('2', 'name2', 2) *** (2) HOLDS THE LOCK(S):RECORD LOCKS space id 154 page no 5 n bits 72 index parent_id of table jpa.child trx id 13035 lock_mode XRecord lock, heap no 1 PHYSICAL RECORD: n_fields 1; compact format; info bits 0 *** (2) WAITING FOR THIS LOCK TO BE GRANTED:RECORD LOCKS space id 154 page no 4 n bits 72 index PRIMARY of table jpa.child trx id 13035 lock mode S locks rec but not gap waitingRecord lock, heap no 3 PHYSICAL RECORD: n_fields 5; compact format; info bits 0 - SELECT * FROM performance_schema.data_locks; | INDEX\_NAME | OBJECT\_INSTANCE\_BEGIN | LOCK\_TYPE | LOCK\_MODE | LOCK\_STATUS | LOCK\_DATA | | :--- | :--- | :--- | :--- | :--- | :--- | | null | 4813003272 | TABLE | IX | GRANTED | null | | parent\_id | 4823656472 | RECORD | X | GRANTED | supremum pseudo-record | | parent\_id | 4823656816 | RECORD | X,INSERT\_INTENTION | GRANTED | supremum pseudo-record | | parent\_id | 4823657160 | RECORD | X,GAP | GRANTED | 1, 1 |]]></summary></entry><entry xml:lang="ko"><title type="html">[Troubleshooting - DB] 외래키(Foreign Key)와 데드락(DeadLock) 그리고 쿼리 지연 실행</title><link href="https://hocaron.github.io/ko/dead-lock-by-fk/" rel="alternate" type="text/html" title="[Troubleshooting - DB] 외래키(Foreign Key)와 데드락(DeadLock) 그리고 쿼리 지연 실행" /><published>2023-05-22T00:00:00+00:00</published><updated>2023-05-22T00:00:00+00:00</updated><id>https://hocaron.github.io/dead-lock-by-fk</id><content type="html" xml:base="https://hocaron.github.io/dead-lock-by-fk/"><![CDATA[<p><img src="https://velog.velcdn.com/images/haron/post/b3f75582-672b-43ae-9972-b5fc8e5a1cc9/image.png" alt="" />
+데드락이 발생할 때마다, 페페가 울고 있다😢 간헐적으로 발생하던 데드락의 원인을 분석하고, 해결 과정을 기록해보자.</p>
+
+<h2 id="외래키foreign-key와-데드락deadlock">외래키(Foreign Key)와 데드락(DeadLock)</h2>
+<p><strong>데드락</strong>이란, 둘 이상의 프로세스가 다른 프로세스가 점유하고 있는 자원을 서로 기다릴 때 무한 대기에 빠지는 상황이다.<br />
+<img src="https://velog.velcdn.com/images/haron/post/33d1e1aa-b838-40e9-bbbd-af4480a0d5fe/image.png" alt="" /><br />
+P1은 P2가 가지고 있는 자원이 해제 되길 기다리고, P2는 P3이 가진 자원, 그 다음..과 같은 형식으로 가장 마지막의 프로세스 Pn가 다시 P1이 가진 자원을 요청하고 해제 되길 기다리는 형태이다.</p>
+
+<p><strong>외래키</strong>란, 외래키는 두 테이블을 서로 연결하는 데 사용되는 키이다. 외래키가 포함된 테이블을 자식 테이블이라고 하고 외래키 값을 제공하는 테이블을 부모 테이블이라고 한다.</p>
+
+<blockquote>
+  <p>Real MySQL 3장을 보면, 아래와 같은 글이 있다.
+“외래키는 부모테이블이나 자식 테이블에 데이터가 있는지 체크하는 작업이 필요하므로 잠금이 여러 테이블로 전파되고, 그로인해 데드락이 발생할 수 있다. 그래서 실무에서는 잘 사용하지 않는다.”</p>
+</blockquote>
+
+<p><img src="https://velog.velcdn.com/images/haron/post/9cb67c04-19fc-4701-98c1-b6a45971eaa9/image.png" alt="" /><br />
+오호라… 잠금이 여러테이블로 전파된다고?!!</p>
+
+<h2 id="데드락이-발생하는-상황-재현">데드락이 발생하는 상황 재현</h2>
+<h3 id="준비물은-이렇게-준비해주세요">준비물은 이렇게 준비해주세요</h3>
+
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">parent</span>
+<span class="p">(</span>
+    <span class="n">id</span>             <span class="nb">bigint</span>        <span class="k">not</span> <span class="k">null</span> <span class="k">primary</span> <span class="k">key</span><span class="p">,</span>
+    <span class="n">name</span>           <span class="nb">varchar</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span>  <span class="k">null</span><span class="p">,</span>
+    <span class="n">updated_at</span>     <span class="nb">datetime</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span>   <span class="k">null</span>
+<span class="p">);</span>
+
+<span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">child</span>
+<span class="p">(</span>
+    <span class="n">id</span>           <span class="nb">bigint</span>          <span class="k">not</span> <span class="k">null</span> <span class="k">primary</span> <span class="k">key</span><span class="p">,</span>
+    <span class="n">name</span>         <span class="nb">varchar</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span>    <span class="k">null</span><span class="p">,</span>
+    <span class="n">parent_id</span>    <span class="nb">bigint</span>          <span class="k">null</span><span class="p">,</span>
+    <span class="k">CONSTRAINT</span> <span class="n">parent_id_unique</span> <span class="k">UNIQUE</span> <span class="p">(</span><span class="n">parent_id</span><span class="p">),</span>
+    <span class="k">CONSTRAINT</span> <span class="n">child_fk</span> <span class="k">FOREIGN</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">parent_id</span><span class="p">)</span> <span class="k">REFERENCES</span> <span class="n">parent</span> <span class="p">(</span><span class="n">id</span><span class="p">)</span>
+<span class="p">);</span>
+
+
+<span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">child_index</span>
+<span class="p">(</span>
+    <span class="n">id</span>           <span class="nb">bigint</span>          <span class="k">not</span> <span class="k">null</span> <span class="k">primary</span> <span class="k">key</span><span class="p">,</span>
+    <span class="n">name</span>         <span class="nb">varchar</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span>    <span class="k">null</span><span class="p">,</span>
+    <span class="n">parent_id</span>    <span class="nb">bigint</span>          <span class="k">null</span><span class="p">,</span>
+    <span class="k">CONSTRAINT</span> <span class="n">child_index_fk</span> <span class="k">FOREIGN</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">parent_id</span><span class="p">)</span> <span class="k">REFERENCES</span> <span class="n">parent</span> <span class="p">(</span><span class="n">id</span><span class="p">)</span>
+<span class="p">);</span>
+<span class="k">CREATE</span> <span class="k">INDEX</span> <span class="n">parent_id</span> <span class="k">ON</span> <span class="n">child_index</span> <span class="p">(</span><span class="n">parent_id</span><span class="p">);</span>
+
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">parent</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">'parent_1'</span><span class="p">,</span> <span class="n">NOW</span><span class="p">());</span>
+</code></pre></div></div>
+<ol>
+  <li>parent 테이블의 id를 foreign key / unique key로 가지고 있는 child 테이블 생성</li>
+  <li>parent 테이블의 id를 foreign key / idnex로 가지고 있는 child_index 테이블 생성</li>
+  <li>parent 테이블에 테스트 데이터 적재</li>
+</ol>
+
+<h3 id="그럼-이제-데드락을-발생시켜-보자">그럼 이제 데드락을 발생시켜 보자</h3>
+<h3 id="자식-row-insert---부모-row-update-가-2개의-세션에서-수행되면-데드락이-발생-">자식 row insert -&gt; 부모 row update 가 2개의 세션에서 수행되면, 데드락이 발생 💣</h3>
+<p><img src="https://velog.velcdn.com/images/haron/post/64f10100-a470-43a9-af95-c4a372b5bd22/image.png" alt="" /></p>
+
+<table>
+  <thead>
+    <tr>
+      <th>TX1</th>
+      <th>TX2</th>
+      <th>lock</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>BEGIN ;  <br /> INSERT INTO child VALUES (1, ‘child1’, 1);</td>
+      <td> </td>
+      <td>(1) child X,REC_NOT_GAP Lock, parent S Lock</td>
+    </tr>
+    <tr>
+      <td> </td>
+      <td>BEGIN ;  <br /> INSERT INTO child VALUES (1, ‘child1’, 1);</td>
+      <td>(2) child X Lock 대기, parent S Lock</td>
+    </tr>
+    <tr>
+      <td>UPDATE parent SET name = ‘newParent’ WHERE id = 1;</td>
+      <td> </td>
+      <td>(3)</td>
+    </tr>
+    <tr>
+      <td> </td>
+      <td>Deadlock found when trying to get lock; try restarting transaction</td>
+      <td>(3) parent X lock 이 필요하지만, (2) 에서 parent는 S lock 상태 <br /> (3) 해소를 위해서 (2) 해소 필요 <br /> -&gt; (2) 해소 위해서 TX1 커밋 필요 <br /> -&gt; TX1이 커밋하려면 (3) 해소 필요 <br /> -&gt; 데드락 발생</td>
+    </tr>
+  </tbody>
+</table>
+
+<p><img src="https://velog.velcdn.com/images/haron/post/609d3b4c-6e3d-4743-af14-5449b7b730fe/image.jpeg" alt="" /></p>
+
+<blockquote>
+  <p>자식 테이블에 대한 쓰기 쿼리를 수행할 때 foreign 키 제약으로 인해 부모의 잠금 상태를 확인후 문제가 없으면 쿼리를 수행하고, 정합성을 유지하기 위해 부모 테이블에 해당 행을 공유잠금 한다.</p>
+</blockquote>
+
+<blockquote>
+  <p>공유 락(Shared(S) Lock)
+공유 락(Shared Lock)은 읽기 락(Read Lock)이라고도 불린다. 공유 락이 걸린 데이터에 대해서는 읽기 연산(SELECT)만 실행 가능하며, 쓰기 연산은 실행이 불가능하다. 공유 락이 걸린 데이터에 대해서 다른 트랜잭션도 똑같이 공유 락을 획득할 수 있으나, 배타 락은 획득할 수 없다. 공유 락이 걸려도 읽기 작업은 가능하다는 뜻이다.
+공유 락을 사용하면, 조회한 데이터가 트랜잭션 내내 변경되지 않음을 보장한다.</p>
+</blockquote>
+
+<blockquote>
+  <p>베타 락(Exclusive(X) Lock)
+배타 락은 쓰기 락(Write Lock)이라고도 불린다. 데이터에 대해 배타 락을 획득한 트랜잭션은, 읽기 연산과 쓰기 연산을 모두 실행할 수 있다. 다른 트랜잭션은 배타 락이 걸린 데이터에 대해 읽기 작업도, 쓰기 작업도 수행할 수 없다. 즉, 배타 락이 걸려있다면 다른 트랜잭션은 공유 락, 배타 락 둘 다 획득 할 수 없다. 배타 락을 획득한 트랜잭션은 해당 데이터에 대한 독점권을 갖는 것이다.</p>
+</blockquote>
+
+<h3 id="부모-row-update--자식-row-insert-가-두개의-세션에서-수행되면-중복키-에러-발생">부모 row update → 자식 row insert 가 두개의 세션에서 수행되면, 중복키 에러 발생</h3>
+<p><img src="https://velog.velcdn.com/images/haron/post/f36e285b-25f9-42f7-a233-7864a0ad9244/image.png" alt="" /><br />
+부모 row 에서 먼저 update 가 일어나면, 데드락은 발생하지 않는다. 중복키 에러는 서비스 특성상 필요해서 추가한 옵션이다.</p>
+
+<h2 id="운영환경에서-데드락이-발생하는-로직을-살펴보자">운영환경에서 데드락이 발생하는 로직을 살펴보자</h2>
+<ul>
+  <li>서비스에서는 jpa 를 사용하고 있어, <code class="language-plaintext highlighter-rouge">show-sql</code> 옵션을 통해 확인하자.
+    <div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">SELECT</span> <span class="o">*</span> <span class="k">from</span> <span class="n">parent</span> <span class="k">WHERE</span> <span class="n">id</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">child</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">'child_1'</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span>
+<span class="k">DELETE</span> <span class="k">FROM</span> <span class="n">child_index</span> <span class="k">WHERE</span> <span class="n">parent_id</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">child_index</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">'child_index_1'</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span>
+<span class="k">UPDATE</span> <span class="n">parent</span> <span class="k">SET</span>  <span class="n">updated_at</span> <span class="o">=</span> <span class="n">NOW</span><span class="p">()</span> <span class="k">WHERE</span> <span class="n">id</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+</code></pre></div>    </div>
+    <p>(테이블 및 컬럼을 간소화 시킨 버전)</p>
+  </li>
+</ul>
+
+<h3 id="자식-row-insert---부모-row-update-가-2개의-세션에서-수행되면-데드락이-발생--1">자식 row insert -&gt; 부모 row update 가 2개의 세션에서 수행되면, 데드락이 발생 💣</h3>
+<p><img src="https://velog.velcdn.com/images/haron/post/b5700769-98a0-45f6-9858-2594d362f922/image.png" alt="" /></p>
+
+<ul>
+  <li>2개의 세션에서 실행되는 이유를 프론트에서 보내는 따닥(2번 이상의 동시 요청)으로 보았다. 🖱🤏🖱🤏</li>
+  <li>프론트의 다른 버튼에서는 같은 이슈가 없는데, 해당 버튼만 데드락이 발생하는 것도 궁금하다 🤔</li>
+</ul>
+
+<h2 id="원인은-알았고-서버에서-데드락을-해결할-수-있는-방법을-고민해보자">원인은 알았고, 서버에서 데드락을 해결할 수 있는 방법을 고민해보자</h2>
+
+<h3 id="-첫번째-시도-부모-row-update--자식-row-insert-로직으로-변경해서-중복키-에러-발생하도록-조정">❎ 첫번째 시도, 부모 row update → 자식 row insert 로직으로 변경해서 중복키 에러 발생하도록 조정</h3>
+<div class="language-java highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="nd">@Transactional</span>
+  <span class="kd">public</span> <span class="kt">void</span> <span class="nf">createChildAndChildIndex</span> <span class="o">(</span><span class="kt">long</span> <span class="n">parentId</span><span class="o">)</span> <span class="o">{</span>
+
+    <span class="kt">var</span> <span class="n">parent</span> <span class="o">=</span> <span class="n">parentRepository</span><span class="o">.</span><span class="na">findById</span><span class="o">(</span><span class="n">parentId</span><span class="o">);</span>
+    <span class="c1">// 부모 row update </span>
+    <span class="n">paraent</span><span class="o">.</span><span class="na">setUpdateAt</span><span class="o">(</span><span class="nc">LocalDateTime</span><span class="o">.</span><span class="na">now</span><span class="o">());</span>
+    
+    <span class="c1">// 자식 row insert</span>
+    <span class="n">childRepository</span><span class="o">.</span><span class="na">save</span><span class="o">(</span><span class="k">new</span> <span class="nc">Child</span><span class="o">(</span><span class="err">'</span><span class="n">child_1</span><span class="err">'</span><span class="o">,</span> <span class="n">parent</span><span class="o">));</span>
+    
+    <span class="n">childIndexRepository</span><span class="o">.</span><span class="na">deleteByParent</span><span class="o">(</span><span class="n">parent</span><span class="o">);</span>
+    <span class="n">childIndexRepository</span><span class="o">.</span><span class="na">save</span><span class="o">(</span><span class="k">new</span> <span class="n">Child_Index</span><span class="o">(</span><span class="err">'</span><span class="n">child_index_1</span><span class="err">'</span><span class="o">,</span> <span class="n">parent</span><span class="o">));</span>
+
+  <span class="o">}</span>
+</code></pre></div></div>
+<p>하지만 여전히 자식 row insert → 부모 row update 로직으로 쿼리가 나가서 데드락이 발생하고 있다. 😇</p>
+
+<h3 id="hibernate-쿼리-실행-우선순위">Hibernate 쿼리 실행 우선순위</h3>
+<p>JPA 쓰기 지연 덕분에 service method 가 끝나고 트랜잭션이 커밋되는 시점에 쿼리가 DB에 반영된다는 것은 알고 있었지만, 우선순위가 있었다고..??</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>OrphanRemovalAction
+AbstractEntityInsertAction
+EntityUpdateAction
+QueuedOperationCollectionAction
+CollectionRemoveAction
+CollectionUpdateAction
+CollectionRecreateAction
+EntityDeleteAction
+
+1. Inserts, in the order they were performed
+2. Updates
+3. Deletion of collection elements
+4. Insertion of collection elements
+5. Deletes, in the order they were performed
+</code></pre></div></div>
+<p>fyi; <a href="https://docs.jboss.org/hibernate/orm/6.1/javadocs/org/hibernate/event/internal/AbstractFlushingEventListener.html#performExecutions(org.hibernate.event.spi.EventSource)">하이버네이트 쿼리 실행 순서</a></p>
+
+<blockquote>
+  <p>외래키 제약 조건이란?
+외래키를 갖는 테이블에 데이터를 삽입할 때는 기준 테이블(외래키에 해당되는 테이블)에 실제로 존재하는 데이터만 참조해야 한다. 없는 데이터를 참조해서 외래키로 써먹으면 안된다고. 그래서 항상 insert가 먼저 되게 하는 것 같다!</p>
+</blockquote>
+
+<p>로직을 변경했음에도 여전히 자식 row insert → 부모 row update 로직으로 쿼리가 나가는 이유는 쓰기 지연에 의해 자식 row insert 가 부모 row update 보다 우선 수행되기 때문이군!</p>
+
+<h3 id="-두번째-시도-부모-row-update-후에-flush-하여-쿼리-실행">❎ 두번째 시도, 부모 row update 후에 flush() 하여 쿼리 실행</h3>
+<div class="language-java highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="nd">@Transactional</span>
+  <span class="kd">public</span> <span class="kt">void</span> <span class="nf">createParent</span> <span class="o">(</span><span class="kt">long</span> <span class="n">parentId</span><span class="o">)</span> <span class="o">{</span>
+
+    <span class="kt">var</span> <span class="n">parent</span> <span class="o">=</span> <span class="n">parentRepository</span><span class="o">.</span><span class="na">findById</span><span class="o">(</span><span class="n">parentId</span><span class="o">);</span>
+    <span class="c1">// 부모 row update </span>
+    <span class="n">paraent</span><span class="o">.</span><span class="na">setUpdateAt</span><span class="o">(</span><span class="nc">LocalDateTime</span><span class="o">.</span><span class="na">now</span><span class="o">());</span>
+    <span class="c1">// 부모 row update 후에 flush()</span>
+    <span class="n">parentRepository</span><span class="o">.</span><span class="na">flush</span><span class="o">();</span>
+    
+    <span class="c1">// 자식 row insert</span>
+    <span class="n">childRepository</span><span class="o">.</span><span class="na">save</span><span class="o">(</span><span class="k">new</span> <span class="nc">Child</span><span class="o">(</span><span class="err">'</span><span class="n">child_1</span><span class="err">'</span><span class="o">,</span> <span class="n">parent</span><span class="o">));</span>
+    
+    <span class="n">childIndexRepository</span><span class="o">.</span><span class="na">deleteByParent</span><span class="o">(</span><span class="n">parent</span><span class="o">);</span>
+    <span class="n">childIndexRepository</span><span class="o">.</span><span class="na">save</span><span class="o">(</span><span class="k">new</span> <span class="n">Child_Index</span><span class="o">(</span><span class="err">'</span><span class="n">child_index_1</span><span class="err">'</span><span class="o">,</span> <span class="n">parent</span><span class="o">));</span>
+
+  <span class="o">}</span>
+</code></pre></div></div>
+
+<p>로직대로 쿼리가 나간다!</p>
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">SELECT</span> <span class="o">*</span> <span class="k">from</span> <span class="n">parent</span> <span class="k">WHERE</span> <span class="n">id</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+<span class="k">UPDATE</span> <span class="n">parent</span> <span class="k">SET</span>  <span class="n">updated_at</span> <span class="o">=</span> <span class="n">NOW</span><span class="p">()</span> <span class="k">WHERE</span> <span class="n">id</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">child</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">'child_1'</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span>
+<span class="k">DELETE</span> <span class="k">FROM</span> <span class="n">child_index</span> <span class="k">WHERE</span> <span class="n">parent_id</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">child_index</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">'child_index_1'</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span>
+</code></pre></div></div>
+<ul>
+  <li>하지만 flush() 가 어떤 사이드 이펙이 있을지와 나중에 히스토리를 모르는 동료가 뜬금없는 flush() 를 보고 이해하지 못 하는 문제가 있다.</li>
+</ul>
+
+<h3 id="-세번째-시도-자식-테이블에-존재하는-외래키-제거">✅ 세번째 시도, 자식 테이블에 존재하는 외래키 제거</h3>
+<p>🤔 2288112 개의 row 가 있는 테이블에서 외래키 제거하는데 소요되는 시간은?!</p>
+
+<ul>
+  <li>자식 row 에 변경사항 때문에 부모 row까지 공유잠금이 걸려서 데드락이 발생하고 있다. 근본적인 문제를 제거하면 되지 않을까?</li>
+  <li>외래키를 제거하는 동안 서비스 중단이 생길까 걱정이 되기도 하고, 궁금해서 해본 테스트
+54973 기준 14 ms 소요</li>
+</ul>
+
+<p><img src="https://velog.velcdn.com/images/haron/post/b66d04a1-8e93-4f24-a8bb-f135946f7669/image.png" alt="" /></p>
+<ul>
+  <li>팀에서 논의 후에 서비스 중단 없이 fk 키를 제거하였고, 모니터링 결과 외래키 제거 후에 자식 테이블에서 발생하던 <code class="language-plaintext highlighter-rouge">SQLTransactionRollbackException</code>(데드락) 은 <code class="language-plaintext highlighter-rouge">DataIntegrityViolationException</code>(중복키) 로 발생된다.</li>
+</ul>
+
+<p><img src="https://velog.velcdn.com/images/haron/post/fa8c8a3e-ad61-4977-b1ff-585b0d262293/image.png" alt="" /></p>
+
+<h3 id="못-해치웠ㄴ">못 해치웠ㄴ…</h3>
+<p><a href="https://velog.io/@haron/%ED%8A%B8%EB%9F%AC%EB%B8%94%EC%8A%88%ED%8C%85-DB-%EC%9D%B8%EB%8D%B1%EC%8A%A4Index%EC%99%80-%EB%8D%B0%EB%93%9C%EB%9D%BDDeadLock-in8ryzsm">인덱스가 날 기다리고 있었..</a></p>
+
+<h2 id="정리">정리</h2>
+<ol>
+  <li>외래키가 걸려있는 경우, 자식 row에 변경이 일어나면 부모 row에 공유 잠금이 걸린다.</li>
+  <li>JPA 쿼리 지연에는 실행 순서가 있다.</li>
+  <li>FK 키를 제거하는데 소요되는 시간은 생각보다 적다.</li>
+</ol>
+
+<h3 id="기록용">기록용</h3>
+<details>
+<summary>SHOW ENGINE innodb STATUS;</summary>
+- SHOW ENGINE innodb STATUS;
+  LOCK WAIT 4 lock struct(s), heap size 1128, 2 row lock(s), undo log entries 1
+  *** (1) HOLDS THE LOCK(S):
+
+  RECORD LOCKS space id 148 page no 4 n bits 72 index PRIMARY of table `jpa`.`parent` trx id 12534 lock mode S locks rec but not gap
+
+  Record lock, heap no 2 PHYSICAL RECORD: n_fields 4; compact format; info bits 0
+
+  *** (1) WAITING FOR THIS LOCK TO BE GRANTED:
+  RECORD LOCKS space id 149 page no 5 n bits 72 index parent_id_unique of table `jpa`.`child` trx id 12534 lock mode S waiting
+  Record lock, heap no 2 PHYSICAL RECORD: n_fields 2; compact format; info bits 0
+
+  *** (2) TRANSACTION:
+
+  TRANSACTION 12533, ACTIVE 13 sec starting index read
+
+  mysql tables in use 1, locked 1
+
+  LOCK WAIT 6 lock struct(s), heap size 1128, 3 row lock(s), undo log entries 1
+
+  MySQL thread id 128, OS thread handle 6143324160, query id 12894 localhost 127.0.0.1 root updating
+
+  /* ApplicationName=DataGrip 2022.3.2 */ UPDATE parent SET name = 'newParent' WHERE id = 1
+
+  *** (2) HOLDS THE LOCK(S):
+  RECORD LOCKS space id 149 page no 5 n bits 72 index parent_id_unique of table `jpa`.`child` trx id 12533 lock_mode X locks rec but not gap
+  Record lock, heap no 2 PHYSICAL RECORD: n_fields 2; compact format; info bits 0
+
+  *** (2) WAITING FOR THIS LOCK TO BE GRANTED:
+  RECORD LOCKS space id 148 page no 4 n bits 72 index PRIMARY of table `jpa`.`parent` trx id 12533 lock_mode X locks rec but not gap waiting
+
+  Record lock, heap no 2 PHYSICAL RECORD: n_fields 4; compact format; info bits 0
+</details>]]></content><author><name>Hocaron</name><email>kkannu0407@gmail.com</email></author><category term="Troubleshooting" /><summary type="html"><![CDATA[데드락이 발생할 때마다, 페페가 울고 있다😢 간헐적으로 발생하던 데드락의 원인을 분석하고, 해결 과정을 기록해보자. 외래키(Foreign Key)와 데드락(DeadLock) 데드락이란, 둘 이상의 프로세스가 다른 프로세스가 점유하고 있는 자원을 서로 기다릴 때 무한 대기에 빠지는 상황이다. P1은 P2가 가지고 있는 자원이 해제 되길 기다리고, P2는 P3이 가진 자원, 그 다음..과 같은 형식으로 가장 마지막의 프로세스 Pn가 다시 P1이 가진 자원을 요청하고 해제 되길 기다리는 형태이다. 외래키란, 외래키는 두 테이블을 서로 연결하는 데 사용되는 키이다. 외래키가 포함된 테이블을 자식 테이블이라고 하고 외래키 값을 제공하는 테이블을 부모 테이블이라고 한다. Real MySQL 3장을 보면, 아래와 같은 글이 있다. “외래키는 부모테이블이나 자식 테이블에 데이터가 있는지 체크하는 작업이 필요하므로 잠금이 여러 테이블로 전파되고, 그로인해 데드락이 발생할 수 있다. 그래서 실무에서는 잘 사용하지 않는다.” 오호라… 잠금이 여러테이블로 전파된다고?!! 데드락이 발생하는 상황 재현 준비물은 이렇게 준비해주세요 CREATE TABLE parent ( id bigint not null primary key, name varchar(255) null, updated_at datetime(6) null ); CREATE TABLE child ( id bigint not null primary key, name varchar(255) null, parent_id bigint null, CONSTRAINT parent_id_unique UNIQUE (parent_id), CONSTRAINT child_fk FOREIGN KEY (parent_id) REFERENCES parent (id) ); CREATE TABLE child_index ( id bigint not null primary key, name varchar(255) null, parent_id bigint null, CONSTRAINT child_index_fk FOREIGN KEY (parent_id) REFERENCES parent (id) ); CREATE INDEX parent_id ON child_index (parent_id); INSERT INTO parent VALUES (1, 'parent_1', NOW()); parent 테이블의 id를 foreign key / unique key로 가지고 있는 child 테이블 생성 parent 테이블의 id를 foreign key / idnex로 가지고 있는 child_index 테이블 생성 parent 테이블에 테스트 데이터 적재 그럼 이제 데드락을 발생시켜 보자 자식 row insert -&gt; 부모 row update 가 2개의 세션에서 수행되면, 데드락이 발생 💣 TX1 TX2 lock BEGIN ; INSERT INTO child VALUES (1, ‘child1’, 1);   (1) child X,REC_NOT_GAP Lock, parent S Lock   BEGIN ; INSERT INTO child VALUES (1, ‘child1’, 1); (2) child X Lock 대기, parent S Lock UPDATE parent SET name = ‘newParent’ WHERE id = 1;   (3)   Deadlock found when trying to get lock; try restarting transaction (3) parent X lock 이 필요하지만, (2) 에서 parent는 S lock 상태 (3) 해소를 위해서 (2) 해소 필요 -&gt; (2) 해소 위해서 TX1 커밋 필요 -&gt; TX1이 커밋하려면 (3) 해소 필요 -&gt; 데드락 발생 자식 테이블에 대한 쓰기 쿼리를 수행할 때 foreign 키 제약으로 인해 부모의 잠금 상태를 확인후 문제가 없으면 쿼리를 수행하고, 정합성을 유지하기 위해 부모 테이블에 해당 행을 공유잠금 한다. 공유 락(Shared(S) Lock) 공유 락(Shared Lock)은 읽기 락(Read Lock)이라고도 불린다. 공유 락이 걸린 데이터에 대해서는 읽기 연산(SELECT)만 실행 가능하며, 쓰기 연산은 실행이 불가능하다. 공유 락이 걸린 데이터에 대해서 다른 트랜잭션도 똑같이 공유 락을 획득할 수 있으나, 배타 락은 획득할 수 없다. 공유 락이 걸려도 읽기 작업은 가능하다는 뜻이다. 공유 락을 사용하면, 조회한 데이터가 트랜잭션 내내 변경되지 않음을 보장한다. 베타 락(Exclusive(X) Lock) 배타 락은 쓰기 락(Write Lock)이라고도 불린다. 데이터에 대해 배타 락을 획득한 트랜잭션은, 읽기 연산과 쓰기 연산을 모두 실행할 수 있다. 다른 트랜잭션은 배타 락이 걸린 데이터에 대해 읽기 작업도, 쓰기 작업도 수행할 수 없다. 즉, 배타 락이 걸려있다면 다른 트랜잭션은 공유 락, 배타 락 둘 다 획득 할 수 없다. 배타 락을 획득한 트랜잭션은 해당 데이터에 대한 독점권을 갖는 것이다. 부모 row update → 자식 row insert 가 두개의 세션에서 수행되면, 중복키 에러 발생 부모 row 에서 먼저 update 가 일어나면, 데드락은 발생하지 않는다. 중복키 에러는 서비스 특성상 필요해서 추가한 옵션이다. 운영환경에서 데드락이 발생하는 로직을 살펴보자 서비스에서는 jpa 를 사용하고 있어, show-sql 옵션을 통해 확인하자. SELECT * from parent WHERE id = 1; INSERT INTO child VALUES (1, 'child_1', 1); DELETE FROM child_index WHERE parent_id = 1; INSERT INTO child_index VALUES (1, 'child_index_1', 1); UPDATE parent SET updated_at = NOW() WHERE id = 1; (테이블 및 컬럼을 간소화 시킨 버전) 자식 row insert -&gt; 부모 row update 가 2개의 세션에서 수행되면, 데드락이 발생 💣 2개의 세션에서 실행되는 이유를 프론트에서 보내는 따닥(2번 이상의 동시 요청)으로 보았다. 🖱🤏🖱🤏 프론트의 다른 버튼에서는 같은 이슈가 없는데, 해당 버튼만 데드락이 발생하는 것도 궁금하다 🤔 원인은 알았고, 서버에서 데드락을 해결할 수 있는 방법을 고민해보자 ❎ 첫번째 시도, 부모 row update → 자식 row insert 로직으로 변경해서 중복키 에러 발생하도록 조정 @Transactional public void createChildAndChildIndex (long parentId) { var parent = parentRepository.findById(parentId); // 부모 row update paraent.setUpdateAt(LocalDateTime.now()); // 자식 row insert childRepository.save(new Child('child_1', parent)); childIndexRepository.deleteByParent(parent); childIndexRepository.save(new Child_Index('child_index_1', parent)); } 하지만 여전히 자식 row insert → 부모 row update 로직으로 쿼리가 나가서 데드락이 발생하고 있다. 😇 Hibernate 쿼리 실행 우선순위 JPA 쓰기 지연 덕분에 service method 가 끝나고 트랜잭션이 커밋되는 시점에 쿼리가 DB에 반영된다는 것은 알고 있었지만, 우선순위가 있었다고..?? OrphanRemovalAction AbstractEntityInsertAction EntityUpdateAction QueuedOperationCollectionAction CollectionRemoveAction CollectionUpdateAction CollectionRecreateAction EntityDeleteAction 1. Inserts, in the order they were performed 2. Updates 3. Deletion of collection elements 4. Insertion of collection elements 5. Deletes, in the order they were performed fyi; 하이버네이트 쿼리 실행 순서 외래키 제약 조건이란? 외래키를 갖는 테이블에 데이터를 삽입할 때는 기준 테이블(외래키에 해당되는 테이블)에 실제로 존재하는 데이터만 참조해야 한다. 없는 데이터를 참조해서 외래키로 써먹으면 안된다고. 그래서 항상 insert가 먼저 되게 하는 것 같다! 로직을 변경했음에도 여전히 자식 row insert → 부모 row update 로직으로 쿼리가 나가는 이유는 쓰기 지연에 의해 자식 row insert 가 부모 row update 보다 우선 수행되기 때문이군! ❎ 두번째 시도, 부모 row update 후에 flush() 하여 쿼리 실행 @Transactional public void createParent (long parentId) { var parent = parentRepository.findById(parentId); // 부모 row update paraent.setUpdateAt(LocalDateTime.now()); // 부모 row update 후에 flush() parentRepository.flush(); // 자식 row insert childRepository.save(new Child('child_1', parent)); childIndexRepository.deleteByParent(parent); childIndexRepository.save(new Child_Index('child_index_1', parent)); } 로직대로 쿼리가 나간다! SELECT * from parent WHERE id = 1; UPDATE parent SET updated_at = NOW() WHERE id = 1; INSERT INTO child VALUES (1, 'child_1', 1); DELETE FROM child_index WHERE parent_id = 1; INSERT INTO child_index VALUES (1, 'child_index_1', 1); 하지만 flush() 가 어떤 사이드 이펙이 있을지와 나중에 히스토리를 모르는 동료가 뜬금없는 flush() 를 보고 이해하지 못 하는 문제가 있다. ✅ 세번째 시도, 자식 테이블에 존재하는 외래키 제거 🤔 2288112 개의 row 가 있는 테이블에서 외래키 제거하는데 소요되는 시간은?! 자식 row 에 변경사항 때문에 부모 row까지 공유잠금이 걸려서 데드락이 발생하고 있다. 근본적인 문제를 제거하면 되지 않을까? 외래키를 제거하는 동안 서비스 중단이 생길까 걱정이 되기도 하고, 궁금해서 해본 테스트 54973 기준 14 ms 소요 팀에서 논의 후에 서비스 중단 없이 fk 키를 제거하였고, 모니터링 결과 외래키 제거 후에 자식 테이블에서 발생하던 SQLTransactionRollbackException(데드락) 은 DataIntegrityViolationException(중복키) 로 발생된다. 못 해치웠ㄴ… 인덱스가 날 기다리고 있었.. 정리 외래키가 걸려있는 경우, 자식 row에 변경이 일어나면 부모 row에 공유 잠금이 걸린다. JPA 쿼리 지연에는 실행 순서가 있다. FK 키를 제거하는데 소요되는 시간은 생각보다 적다. 기록용 SHOW ENGINE innodb STATUS; - SHOW ENGINE innodb STATUS; LOCK WAIT 4 lock struct(s), heap size 1128, 2 row lock(s), undo log entries 1 *** (1) HOLDS THE LOCK(S): RECORD LOCKS space id 148 page no 4 n bits 72 index PRIMARY of table `jpa`.`parent` trx id 12534 lock mode S locks rec but not gap Record lock, heap no 2 PHYSICAL RECORD: n_fields 4; compact format; info bits 0 *** (1) WAITING FOR THIS LOCK TO BE GRANTED: RECORD LOCKS space id 149 page no 5 n bits 72 index parent_id_unique of table `jpa`.`child` trx id 12534 lock mode S waiting Record lock, heap no 2 PHYSICAL RECORD: n_fields 2; compact format; info bits 0 *** (2) TRANSACTION: TRANSACTION 12533, ACTIVE 13 sec starting index read mysql tables in use 1, locked 1 LOCK WAIT 6 lock struct(s), heap size 1128, 3 row lock(s), undo log entries 1 MySQL thread id 128, OS thread handle 6143324160, query id 12894 localhost 127.0.0.1 root updating /* ApplicationName=DataGrip 2022.3.2 */ UPDATE parent SET name = 'newParent' WHERE id = 1 *** (2) HOLDS THE LOCK(S): RECORD LOCKS space id 149 page no 5 n bits 72 index parent_id_unique of table `jpa`.`child` trx id 12533 lock_mode X locks rec but not gap Record lock, heap no 2 PHYSICAL RECORD: n_fields 2; compact format; info bits 0 *** (2) WAITING FOR THIS LOCK TO BE GRANTED: RECORD LOCKS space id 148 page no 4 n bits 72 index PRIMARY of table `jpa`.`parent` trx id 12533 lock_mode X locks rec but not gap waiting Record lock, heap no 2 PHYSICAL RECORD: n_fields 4; compact format; info bits 0]]></summary></entry></feed>

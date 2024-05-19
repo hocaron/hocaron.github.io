@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- Begin Jekyll SEO tag v2.8.0 -->
+<title>[Troubleshooting - DB] Index and Deadlock | public var hocaron</title>
+<meta name="generator" content="Jekyll v4.3.3" />
+<meta property="og:title" content="[Troubleshooting - DB] Index and Deadlock" />
+<meta name="author" content="Hocaron" />
+<meta property="og:locale" content="en" />
+<meta name="description" content="Have I Defeated It? Pepe starts crying again… (Stop crying!) Let’s record this as a meaningful experience. Reproducing the Deadlock Scenario Current Table State CREATE TABLE parent ( id bigint not null primary key, name varchar(255) null, updated_at datetime(6) null ); CREATE TABLE child ( id bigint not null primary key, name varchar(255) null, parent_id bigint null, CONSTRAINT parent_id_unique UNIQUE (parent_id) ); CREATE TABLE child_index ( id bigint not null primary key, name varchar(255) null, parent_id bigint null ); CREATE INDEX parent_id ON child_index (parent_id); INSERT INTO parent VALUES (1, &#39;parent_1&#39;, NOW()); Created the child_index table with parent_id as an index (foreign key removed for testing). Created the child table with parent_id as a unique key (foreign key removed for testing). Inserted test data into the parent table. Let’s Cause a Deadlock Performing row delete on child_index followed by row insert on child_index in two sessions causes a deadlock 💣 TX1 TX2 Lock BEGIN ; DELETE FROM child_index WHERE parent_id = 2;   (1) Child X Lock, but TX2 can acquire X Lock 🤔   BEGIN ; DELETE FROM child_index WHERE parent_id = 2; (2) Child X Lock INSERT INTO child_index VALUES (‘1’, ‘name2’, 2);   (3) Waiting for Child X, INSERT_INTENTION Lock   INSERT INTO child_index VALUES (‘2’, ‘name2’, 2); (4) Waiting for Child X, INSERT_INTENTION Lock   Deadlock found when trying to get lock; try restarting transaction (4) Needs Child X lock, but (2) holds Child X lock To resolve (4), (3) must resolve To resolve (3), TX2 must commit To commit TX2, (4) must resolve -&gt; Deadlock occurs Examining the Deadlock Logic in Production Performing row delete on child_index followed by row insert on child_index in two sessions causes a deadlock 💣 SELECT * FROM parent WHERE id = 1; INSERT INTO child VALUES (1, &#39;child_1&#39;, 1); DELETE FROM child_index WHERE parent_id = 1; INSERT INTO child_index VALUES (1, &#39;child_index_1&#39;, 1); UPDATE parent SET updated_at = NOW() WHERE id = 1; @Transactional public void createChildAndChildIndex(long parentId) { var parent = parentRepository.findById(parentId); childIndexRepository.deleteByParent(parent); childIndexRepository.save(new Child_Index(&#39;child_index_1&#39;, parent)); } Interestingly, a deadlock occurs when the data to be deleted does not exist. When the data to be deleted exists, the lock waits until it can be acquired. Solutions to Resolve the Deadlock in Production ❎ First Attempt: Delete Row Only If It Exists @Transactional public void createParent(long parentId) { var parent = parentRepository.findById(parentId); if (childIndexRepository.findByParent(parent).isPresent()) { childIndexRepository.deleteByParent(parent); } childIndexRepository.save(new Child_Index(&#39;child_index_1&#39;, parent)); } This prevents the exclusive lock due to the unconditional delete logic. If concurrent requests find no data in childIndexRepository.findByParent, data may be duplicated. Testing with a 300ms thread sleep confirmed duplication. ✅ Second Attempt: Delete Row Only If It Exists with Unique Constraint CREATE TABLE child_index ( id bigint not null primary key, name varchar(255) null, parent_id bigint null, CONSTRAINT parent_id_unique UNIQUE (parent_id) ); CREATE INDEX parent_id ON child_index (parent_id); Concurrent requests with no data found in childIndexRepository.findByParent result in a duplicate key error for subsequent commits. ❎ Third Attempt: Add Key for Concurrency Control in Redis Due to occasional deadlocks and the absence of Redis usage in this service, the cache resource overhead seemed excessive. ❎ Fourth Attempt: Limit Requests Using Bucket4j to limit the number of API calls a client can make within a specific time frame. Deadlock prevention is impossible with multiple servers as concurrent requests can hit different servers. Summary When data is not present, delete queries allow delete and select but wait for the lock during insert. For more on locks, refer to the InnoDB Locking Documentation in MySQL Official Manual. It is well-organized with examples. Interesting Experiment Query Based on Indexed Column When data exists, the second transaction waits for the lock during delete. BEGIN ; DELETE FROM child_index WHERE parent_id = 1; INSERT INTO child_index VALUES (1, &#39;child_index_1&#39;, 1); COMMIT ; When data does not exist, the second transaction acquires the lock immediately during delete. BEGIN ; DELETE FROM child_index WHERE parent_id = 1; INSERT INTO child_index VALUES (1, &#39;child_index_1&#39;, 1); COMMIT ; Query Based on Non-Indexed Column Whether data exists or not, the second transaction waits for the lock during delete. BEGIN ; DELETE FROM child_index WHERE name = &#39;child_index_2&#39;; INSERT INTO child_index VALUES (1, &#39;child_index_1&#39;, 1); COMMIT ; For the Record SHOW ENGINE innodb STATUS; *** (1) TRANSACTION:TRANSACTION 13034, ACTIVE 6 sec insertingmysql tables in use 1, locked 1LOCK WAIT 4 lock struct(s), heap size 1128, 3 row lock(s), undo log entries 1MySQL thread id 280, OS thread handle 6136639488, query id 21716 localhost 127.0.0.1 root update/* ApplicationName=DataGrip 2022.3.2 */ insert into child values (&#39;2&#39;, &#39;name2&#39;, 2) *** (1) HOLDS THE LOCK(S):RECORD LOCKS space id 154 page no 4 n bits 72 index PRIMARY of table jpa.child trx id 13034 lock_mode X locks rec but not gapRecord lock, heap no 3 PHYSICAL RECORD: n_fields 5; compact format; info bits 0 *** (1) WAITING FOR THIS LOCK TO BE GRANTED:RECORD LOCKS space id 154 page no 5 n bits 72 index parent_id of table jpa.child trx id 13034 lock_mode X insert intention waitingRecord lock, heap no 1 PHYSICAL RECORD: n_fields 1; compact format; info bits 0 *** (2) TRANSACTION:TRANSACTION 13035, ACTIVE 4 sec insertingmysql tables in use 1, locked 1LOCK WAIT 3 lock struct(s), heap size 1128, 2 row lock(s)MySQL thread id 281, OS thread handle 6135525376, query id 21726 localhost 127.0.0.1 root update/* ApplicationName=DataGrip 2022.3.2 */ insert into child values (&#39;2&#39;, &#39;name2&#39;, 2) *** (2) HOLDS THE LOCK(S):RECORD LOCKS space id 154 page no 5 n bits 72 index parent_id of table jpa.child trx id 13035 lock_mode XRecord lock, heap no 1 PHYSICAL RECORD: n_fields 1; compact format; info bits 0 *** (2) WAITING FOR THIS LOCK TO BE GRANTED:RECORD LOCKS space id 154 page no 4 n bits 72 index PRIMARY of table jpa.child trx id 13035 lock mode S locks rec but not gap waitingRecord lock, heap no 3 PHYSICAL RECORD: n_fields 5; compact format; info bits 0 - SELECT * FROM performance_schema.data_locks; | INDEX\_NAME | OBJECT\_INSTANCE\_BEGIN | LOCK\_TYPE | LOCK\_MODE | LOCK\_STATUS | LOCK\_DATA | | :--- | :--- | :--- | :--- | :--- | :--- | | null | 4813003272 | TABLE | IX | GRANTED | null | | parent\_id | 4823656472 | RECORD | X | GRANTED | supremum pseudo-record | | parent\_id | 4823656816 | RECORD | X,INSERT\_INTENTION | GRANTED | supremum pseudo-record | | parent\_id | 4823657160 | RECORD | X,GAP | GRANTED | 1, 1 |" />
+<meta property="og:description" content="Have I Defeated It? Pepe starts crying again… (Stop crying!) Let’s record this as a meaningful experience. Reproducing the Deadlock Scenario Current Table State CREATE TABLE parent ( id bigint not null primary key, name varchar(255) null, updated_at datetime(6) null ); CREATE TABLE child ( id bigint not null primary key, name varchar(255) null, parent_id bigint null, CONSTRAINT parent_id_unique UNIQUE (parent_id) ); CREATE TABLE child_index ( id bigint not null primary key, name varchar(255) null, parent_id bigint null ); CREATE INDEX parent_id ON child_index (parent_id); INSERT INTO parent VALUES (1, &#39;parent_1&#39;, NOW()); Created the child_index table with parent_id as an index (foreign key removed for testing). Created the child table with parent_id as a unique key (foreign key removed for testing). Inserted test data into the parent table. Let’s Cause a Deadlock Performing row delete on child_index followed by row insert on child_index in two sessions causes a deadlock 💣 TX1 TX2 Lock BEGIN ; DELETE FROM child_index WHERE parent_id = 2;   (1) Child X Lock, but TX2 can acquire X Lock 🤔   BEGIN ; DELETE FROM child_index WHERE parent_id = 2; (2) Child X Lock INSERT INTO child_index VALUES (‘1’, ‘name2’, 2);   (3) Waiting for Child X, INSERT_INTENTION Lock   INSERT INTO child_index VALUES (‘2’, ‘name2’, 2); (4) Waiting for Child X, INSERT_INTENTION Lock   Deadlock found when trying to get lock; try restarting transaction (4) Needs Child X lock, but (2) holds Child X lock To resolve (4), (3) must resolve To resolve (3), TX2 must commit To commit TX2, (4) must resolve -&gt; Deadlock occurs Examining the Deadlock Logic in Production Performing row delete on child_index followed by row insert on child_index in two sessions causes a deadlock 💣 SELECT * FROM parent WHERE id = 1; INSERT INTO child VALUES (1, &#39;child_1&#39;, 1); DELETE FROM child_index WHERE parent_id = 1; INSERT INTO child_index VALUES (1, &#39;child_index_1&#39;, 1); UPDATE parent SET updated_at = NOW() WHERE id = 1; @Transactional public void createChildAndChildIndex(long parentId) { var parent = parentRepository.findById(parentId); childIndexRepository.deleteByParent(parent); childIndexRepository.save(new Child_Index(&#39;child_index_1&#39;, parent)); } Interestingly, a deadlock occurs when the data to be deleted does not exist. When the data to be deleted exists, the lock waits until it can be acquired. Solutions to Resolve the Deadlock in Production ❎ First Attempt: Delete Row Only If It Exists @Transactional public void createParent(long parentId) { var parent = parentRepository.findById(parentId); if (childIndexRepository.findByParent(parent).isPresent()) { childIndexRepository.deleteByParent(parent); } childIndexRepository.save(new Child_Index(&#39;child_index_1&#39;, parent)); } This prevents the exclusive lock due to the unconditional delete logic. If concurrent requests find no data in childIndexRepository.findByParent, data may be duplicated. Testing with a 300ms thread sleep confirmed duplication. ✅ Second Attempt: Delete Row Only If It Exists with Unique Constraint CREATE TABLE child_index ( id bigint not null primary key, name varchar(255) null, parent_id bigint null, CONSTRAINT parent_id_unique UNIQUE (parent_id) ); CREATE INDEX parent_id ON child_index (parent_id); Concurrent requests with no data found in childIndexRepository.findByParent result in a duplicate key error for subsequent commits. ❎ Third Attempt: Add Key for Concurrency Control in Redis Due to occasional deadlocks and the absence of Redis usage in this service, the cache resource overhead seemed excessive. ❎ Fourth Attempt: Limit Requests Using Bucket4j to limit the number of API calls a client can make within a specific time frame. Deadlock prevention is impossible with multiple servers as concurrent requests can hit different servers. Summary When data is not present, delete queries allow delete and select but wait for the lock during insert. For more on locks, refer to the InnoDB Locking Documentation in MySQL Official Manual. It is well-organized with examples. Interesting Experiment Query Based on Indexed Column When data exists, the second transaction waits for the lock during delete. BEGIN ; DELETE FROM child_index WHERE parent_id = 1; INSERT INTO child_index VALUES (1, &#39;child_index_1&#39;, 1); COMMIT ; When data does not exist, the second transaction acquires the lock immediately during delete. BEGIN ; DELETE FROM child_index WHERE parent_id = 1; INSERT INTO child_index VALUES (1, &#39;child_index_1&#39;, 1); COMMIT ; Query Based on Non-Indexed Column Whether data exists or not, the second transaction waits for the lock during delete. BEGIN ; DELETE FROM child_index WHERE name = &#39;child_index_2&#39;; INSERT INTO child_index VALUES (1, &#39;child_index_1&#39;, 1); COMMIT ; For the Record SHOW ENGINE innodb STATUS; *** (1) TRANSACTION:TRANSACTION 13034, ACTIVE 6 sec insertingmysql tables in use 1, locked 1LOCK WAIT 4 lock struct(s), heap size 1128, 3 row lock(s), undo log entries 1MySQL thread id 280, OS thread handle 6136639488, query id 21716 localhost 127.0.0.1 root update/* ApplicationName=DataGrip 2022.3.2 */ insert into child values (&#39;2&#39;, &#39;name2&#39;, 2) *** (1) HOLDS THE LOCK(S):RECORD LOCKS space id 154 page no 4 n bits 72 index PRIMARY of table jpa.child trx id 13034 lock_mode X locks rec but not gapRecord lock, heap no 3 PHYSICAL RECORD: n_fields 5; compact format; info bits 0 *** (1) WAITING FOR THIS LOCK TO BE GRANTED:RECORD LOCKS space id 154 page no 5 n bits 72 index parent_id of table jpa.child trx id 13034 lock_mode X insert intention waitingRecord lock, heap no 1 PHYSICAL RECORD: n_fields 1; compact format; info bits 0 *** (2) TRANSACTION:TRANSACTION 13035, ACTIVE 4 sec insertingmysql tables in use 1, locked 1LOCK WAIT 3 lock struct(s), heap size 1128, 2 row lock(s)MySQL thread id 281, OS thread handle 6135525376, query id 21726 localhost 127.0.0.1 root update/* ApplicationName=DataGrip 2022.3.2 */ insert into child values (&#39;2&#39;, &#39;name2&#39;, 2) *** (2) HOLDS THE LOCK(S):RECORD LOCKS space id 154 page no 5 n bits 72 index parent_id of table jpa.child trx id 13035 lock_mode XRecord lock, heap no 1 PHYSICAL RECORD: n_fields 1; compact format; info bits 0 *** (2) WAITING FOR THIS LOCK TO BE GRANTED:RECORD LOCKS space id 154 page no 4 n bits 72 index PRIMARY of table jpa.child trx id 13035 lock mode S locks rec but not gap waitingRecord lock, heap no 3 PHYSICAL RECORD: n_fields 5; compact format; info bits 0 - SELECT * FROM performance_schema.data_locks; | INDEX\_NAME | OBJECT\_INSTANCE\_BEGIN | LOCK\_TYPE | LOCK\_MODE | LOCK\_STATUS | LOCK\_DATA | | :--- | :--- | :--- | :--- | :--- | :--- | | null | 4813003272 | TABLE | IX | GRANTED | null | | parent\_id | 4823656472 | RECORD | X | GRANTED | supremum pseudo-record | | parent\_id | 4823656816 | RECORD | X,INSERT\_INTENTION | GRANTED | supremum pseudo-record | | parent\_id | 4823657160 | RECORD | X,GAP | GRANTED | 1, 1 |" />
+<link rel="canonical" href="https://hocaron.github.io/dead-lock-by-index/" />
+<meta property="og:url" content="https://hocaron.github.io/dead-lock-by-index/" />
+<meta property="og:site_name" content="public var hocaron" />
+<meta property="og:type" content="article" />
+<meta property="article:published_time" content="2023-05-23T00:00:00+00:00" />
+<meta name="twitter:card" content="summary" />
+<meta property="twitter:title" content="[Troubleshooting - DB] Index and Deadlock" />
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","author":{"@type":"Person","name":"Hocaron","url":"https://hocaron.github.io"},"dateModified":"2023-05-23T00:00:00+00:00","datePublished":"2023-05-23T00:00:00+00:00","description":"Have I Defeated It? Pepe starts crying again… (Stop crying!) Let’s record this as a meaningful experience. Reproducing the Deadlock Scenario Current Table State CREATE TABLE parent ( id bigint not null primary key, name varchar(255) null, updated_at datetime(6) null ); CREATE TABLE child ( id bigint not null primary key, name varchar(255) null, parent_id bigint null, CONSTRAINT parent_id_unique UNIQUE (parent_id) ); CREATE TABLE child_index ( id bigint not null primary key, name varchar(255) null, parent_id bigint null ); CREATE INDEX parent_id ON child_index (parent_id); INSERT INTO parent VALUES (1, &#39;parent_1&#39;, NOW()); Created the child_index table with parent_id as an index (foreign key removed for testing). Created the child table with parent_id as a unique key (foreign key removed for testing). Inserted test data into the parent table. Let’s Cause a Deadlock Performing row delete on child_index followed by row insert on child_index in two sessions causes a deadlock 💣 TX1 TX2 Lock BEGIN ; DELETE FROM child_index WHERE parent_id = 2;   (1) Child X Lock, but TX2 can acquire X Lock 🤔   BEGIN ; DELETE FROM child_index WHERE parent_id = 2; (2) Child X Lock INSERT INTO child_index VALUES (‘1’, ‘name2’, 2);   (3) Waiting for Child X, INSERT_INTENTION Lock   INSERT INTO child_index VALUES (‘2’, ‘name2’, 2); (4) Waiting for Child X, INSERT_INTENTION Lock   Deadlock found when trying to get lock; try restarting transaction (4) Needs Child X lock, but (2) holds Child X lock To resolve (4), (3) must resolve To resolve (3), TX2 must commit To commit TX2, (4) must resolve -&gt; Deadlock occurs Examining the Deadlock Logic in Production Performing row delete on child_index followed by row insert on child_index in two sessions causes a deadlock 💣 SELECT * FROM parent WHERE id = 1; INSERT INTO child VALUES (1, &#39;child_1&#39;, 1); DELETE FROM child_index WHERE parent_id = 1; INSERT INTO child_index VALUES (1, &#39;child_index_1&#39;, 1); UPDATE parent SET updated_at = NOW() WHERE id = 1; @Transactional public void createChildAndChildIndex(long parentId) { var parent = parentRepository.findById(parentId); childIndexRepository.deleteByParent(parent); childIndexRepository.save(new Child_Index(&#39;child_index_1&#39;, parent)); } Interestingly, a deadlock occurs when the data to be deleted does not exist. When the data to be deleted exists, the lock waits until it can be acquired. Solutions to Resolve the Deadlock in Production ❎ First Attempt: Delete Row Only If It Exists @Transactional public void createParent(long parentId) { var parent = parentRepository.findById(parentId); if (childIndexRepository.findByParent(parent).isPresent()) { childIndexRepository.deleteByParent(parent); } childIndexRepository.save(new Child_Index(&#39;child_index_1&#39;, parent)); } This prevents the exclusive lock due to the unconditional delete logic. If concurrent requests find no data in childIndexRepository.findByParent, data may be duplicated. Testing with a 300ms thread sleep confirmed duplication. ✅ Second Attempt: Delete Row Only If It Exists with Unique Constraint CREATE TABLE child_index ( id bigint not null primary key, name varchar(255) null, parent_id bigint null, CONSTRAINT parent_id_unique UNIQUE (parent_id) ); CREATE INDEX parent_id ON child_index (parent_id); Concurrent requests with no data found in childIndexRepository.findByParent result in a duplicate key error for subsequent commits. ❎ Third Attempt: Add Key for Concurrency Control in Redis Due to occasional deadlocks and the absence of Redis usage in this service, the cache resource overhead seemed excessive. ❎ Fourth Attempt: Limit Requests Using Bucket4j to limit the number of API calls a client can make within a specific time frame. Deadlock prevention is impossible with multiple servers as concurrent requests can hit different servers. Summary When data is not present, delete queries allow delete and select but wait for the lock during insert. For more on locks, refer to the InnoDB Locking Documentation in MySQL Official Manual. It is well-organized with examples. Interesting Experiment Query Based on Indexed Column When data exists, the second transaction waits for the lock during delete. BEGIN ; DELETE FROM child_index WHERE parent_id = 1; INSERT INTO child_index VALUES (1, &#39;child_index_1&#39;, 1); COMMIT ; When data does not exist, the second transaction acquires the lock immediately during delete. BEGIN ; DELETE FROM child_index WHERE parent_id = 1; INSERT INTO child_index VALUES (1, &#39;child_index_1&#39;, 1); COMMIT ; Query Based on Non-Indexed Column Whether data exists or not, the second transaction waits for the lock during delete. BEGIN ; DELETE FROM child_index WHERE name = &#39;child_index_2&#39;; INSERT INTO child_index VALUES (1, &#39;child_index_1&#39;, 1); COMMIT ; For the Record SHOW ENGINE innodb STATUS; *** (1) TRANSACTION:TRANSACTION 13034, ACTIVE 6 sec insertingmysql tables in use 1, locked 1LOCK WAIT 4 lock struct(s), heap size 1128, 3 row lock(s), undo log entries 1MySQL thread id 280, OS thread handle 6136639488, query id 21716 localhost 127.0.0.1 root update/* ApplicationName=DataGrip 2022.3.2 */ insert into child values (&#39;2&#39;, &#39;name2&#39;, 2) *** (1) HOLDS THE LOCK(S):RECORD LOCKS space id 154 page no 4 n bits 72 index PRIMARY of table jpa.child trx id 13034 lock_mode X locks rec but not gapRecord lock, heap no 3 PHYSICAL RECORD: n_fields 5; compact format; info bits 0 *** (1) WAITING FOR THIS LOCK TO BE GRANTED:RECORD LOCKS space id 154 page no 5 n bits 72 index parent_id of table jpa.child trx id 13034 lock_mode X insert intention waitingRecord lock, heap no 1 PHYSICAL RECORD: n_fields 1; compact format; info bits 0 *** (2) TRANSACTION:TRANSACTION 13035, ACTIVE 4 sec insertingmysql tables in use 1, locked 1LOCK WAIT 3 lock struct(s), heap size 1128, 2 row lock(s)MySQL thread id 281, OS thread handle 6135525376, query id 21726 localhost 127.0.0.1 root update/* ApplicationName=DataGrip 2022.3.2 */ insert into child values (&#39;2&#39;, &#39;name2&#39;, 2) *** (2) HOLDS THE LOCK(S):RECORD LOCKS space id 154 page no 5 n bits 72 index parent_id of table jpa.child trx id 13035 lock_mode XRecord lock, heap no 1 PHYSICAL RECORD: n_fields 1; compact format; info bits 0 *** (2) WAITING FOR THIS LOCK TO BE GRANTED:RECORD LOCKS space id 154 page no 4 n bits 72 index PRIMARY of table jpa.child trx id 13035 lock mode S locks rec but not gap waitingRecord lock, heap no 3 PHYSICAL RECORD: n_fields 5; compact format; info bits 0 - SELECT * FROM performance_schema.data_locks; | INDEX\\_NAME | OBJECT\\_INSTANCE\\_BEGIN | LOCK\\_TYPE | LOCK\\_MODE | LOCK\\_STATUS | LOCK\\_DATA | | :--- | :--- | :--- | :--- | :--- | :--- | | null | 4813003272 | TABLE | IX | GRANTED | null | | parent\\_id | 4823656472 | RECORD | X | GRANTED | supremum pseudo-record | | parent\\_id | 4823656816 | RECORD | X,INSERT\\_INTENTION | GRANTED | supremum pseudo-record | | parent\\_id | 4823657160 | RECORD | X,GAP | GRANTED | 1, 1 |","headline":"[Troubleshooting - DB] Index and Deadlock","mainEntityOfPage":{"@type":"WebPage","@id":"https://hocaron.github.io/dead-lock-by-index/"},"url":"https://hocaron.github.io/dead-lock-by-index/"}</script>
+<!-- End Jekyll SEO tag -->
+
+
+  <!-- CSS -->
+  <link rel="stylesheet" href="/assets/main.css">
+  <link rel="stylesheet" href="../assets/main.js">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Libre+Baskerville:400,400i,700">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.11.1/css/all.min.css" />
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon-16x16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/assets/apple-touch-icon.png">
+
+  <!-- RSS -->
+  <link type="application/atom+xml" rel="alternate" href="https://hocaron.github.io/feed.xml" title="public var hocaron" />
+
+  <!-- Google Analytics-->
+  
+  <script>
+  window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+  ga('create', 'UA—XXXXXXXX-X', 'auto');
+  ga('send', 'pageview');
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+  
+
+  <!-- JavaScript -->
+  <script src="https://code.jquery.com/jquery-1.12.4.js"></script>
+  <script type="text/javascript" src="../assets/main.js"></script>
+
+  <!-- SEO for Polyglot -->
+  
+</head>
+
+
+<body>
+<div>
+  
+
+
+
+
+<nav class="nav">
+  <div class="nav-container">
+    <a href="/">
+      <h2 class="nav-title">public var hocaron</h2>
+    </a>
+    <ul>
+      <li class="selected">
+      <a href="/">Posts</a>
+      </li>
+      <li >
+        <a href="/series">Series</a>
+      </li>
+      <li >
+        <a href="/about">About</a>
+      </li>
+
+      <li>
+        
+        
+        
+        <a class="lang "
+           href="
+                /ko/dead-lock-by-index/
+              ">
+          KOR
+          |
+        </a>
+        
+        
+        
+        <a class="lang active"
+           href="
+                /dead-lock-by-index/
+              ">
+          ENG
+          
+        </a>
+        
+      </li>
+
+    </ul>
+  </div>
+</nav>
+
+
+  <main>
+    <div class="post">
+  <div class="post-info">
+<!--    <span>Written by</span>-->
+<!--    -->
+<!--        Hocaron-->
+<!--    -->
+
+    
+      <br>
+      <span>on&nbsp;</span><time datetime="2023-05-23 00:00:00 +0000">May 23, 2023</time>
+    
+  </div>
+
+  <h1 class="post-title">[Troubleshooting - DB] Index and Deadlock</h1>
+<!--  <div class="post-line"></div>-->
+  <article class="post-article">
+    <div class="toc">
+      <ul><li><a href="#have-i-defeated-it">Have I Defeated It?</a></li><li><a href="#current-table-state">Current Table State</a></li><li><a href="#lets-cause-a-deadlock">Let’s Cause a Deadlock</a></li><li><a href="#-first-attempt-delete-row-only-if-it-exists">❎ First Attempt: Delete Row Only If It Exists</a></li><li><a href="#-second-attempt-delete-row-only-if-it-exists-with-unique-constraint">✅ Second Attempt: Delete Row Only If It Exists with Unique Constraint</a></li><li><a href="#-third-attempt-add-key-for-concurrency-control-in-redis">❎ Third Attempt: Add Key for Concurrency Control in Redis</a></li><li><a href="#-fourth-attempt-limit-requests">❎ Fourth Attempt: Limit Requests</a></li><li><a href="#interesting-experiment">Interesting Experiment</a><ul><li><a href="#query-based-on-indexed-column">Query Based on Indexed Column</a></li><li><a href="#query-based-on-non-indexed-column">Query Based on Non-Indexed Column</a></li></ul></li><li><a href="#for-the-record">For the Record</a></li></ul>
+
+    </div>
+    <h3 id="have-i-defeated-it">Have I Defeated It?</h3>
+
+<p>Pepe starts crying again… (Stop crying!)</p>
+
+<p>Let’s record this as a meaningful experience.</p>
+
+<p><img src="https://velog.velcdn.com/images/haron/post/1687c152-873d-425f-96f9-174735a9c262/image.png" alt="Pepe crying" /></p>
+
+<h2 id="reproducing-the-deadlock-scenario">Reproducing the Deadlock Scenario</h2>
+
+<h3 id="current-table-state">Current Table State</h3>
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">parent</span>
+<span class="p">(</span>
+    <span class="n">id</span>             <span class="nb">bigint</span>        <span class="k">not</span> <span class="k">null</span> <span class="k">primary</span> <span class="k">key</span><span class="p">,</span>
+    <span class="n">name</span>           <span class="nb">varchar</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span>  <span class="k">null</span><span class="p">,</span>
+    <span class="n">updated_at</span>     <span class="nb">datetime</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span>   <span class="k">null</span>
+<span class="p">);</span>
+
+<span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">child</span>
+<span class="p">(</span>
+    <span class="n">id</span>           <span class="nb">bigint</span>          <span class="k">not</span> <span class="k">null</span> <span class="k">primary</span> <span class="k">key</span><span class="p">,</span>
+    <span class="n">name</span>         <span class="nb">varchar</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span>    <span class="k">null</span><span class="p">,</span>
+    <span class="n">parent_id</span>    <span class="nb">bigint</span>          <span class="k">null</span><span class="p">,</span>
+    <span class="k">CONSTRAINT</span> <span class="n">parent_id_unique</span> <span class="k">UNIQUE</span> <span class="p">(</span><span class="n">parent_id</span><span class="p">)</span>
+<span class="p">);</span>
+
+<span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">child_index</span>
+<span class="p">(</span>
+    <span class="n">id</span>           <span class="nb">bigint</span>          <span class="k">not</span> <span class="k">null</span> <span class="k">primary</span> <span class="k">key</span><span class="p">,</span>
+    <span class="n">name</span>         <span class="nb">varchar</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span>    <span class="k">null</span><span class="p">,</span>
+    <span class="n">parent_id</span>    <span class="nb">bigint</span>          <span class="k">null</span>
+<span class="p">);</span>
+<span class="k">CREATE</span> <span class="k">INDEX</span> <span class="n">parent_id</span> <span class="k">ON</span> <span class="n">child_index</span> <span class="p">(</span><span class="n">parent_id</span><span class="p">);</span>
+
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">parent</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">'parent_1'</span><span class="p">,</span> <span class="n">NOW</span><span class="p">());</span>
+</code></pre></div></div>
+<ol>
+  <li>Created the <code class="language-plaintext highlighter-rouge">child_index</code> table with <code class="language-plaintext highlighter-rouge">parent_id</code> as an index (foreign key removed for testing).</li>
+  <li>Created the <code class="language-plaintext highlighter-rouge">child</code> table with <code class="language-plaintext highlighter-rouge">parent_id</code> as a unique key (foreign key removed for testing).</li>
+  <li>Inserted test data into the <code class="language-plaintext highlighter-rouge">parent</code> table.</li>
+</ol>
+
+<h3 id="lets-cause-a-deadlock">Let’s Cause a Deadlock</h3>
+
+<p>Performing row delete on <code class="language-plaintext highlighter-rouge">child_index</code> followed by row insert on <code class="language-plaintext highlighter-rouge">child_index</code> in two sessions causes a deadlock 💣</p>
+
+<p><img src="https://velog.velcdn.com/images/haron/post/bc47166e-b1b7-4f30-ac1f-09932cb38ff7/image.png" alt="Deadlock scenario" /></p>
+
+<table>
+  <thead>
+    <tr>
+      <th>TX1</th>
+      <th>TX2</th>
+      <th>Lock</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>BEGIN ;<br /> DELETE FROM child_index WHERE parent_id = 2;</td>
+      <td> </td>
+      <td>(1) Child X Lock, but TX2 can acquire X Lock 🤔</td>
+    </tr>
+    <tr>
+      <td> </td>
+      <td>BEGIN ;<br /> DELETE FROM child_index WHERE parent_id = 2;</td>
+      <td>(2) Child X Lock</td>
+    </tr>
+    <tr>
+      <td>INSERT INTO child_index VALUES (‘1’, ‘name2’, 2);</td>
+      <td> </td>
+      <td>(3) Waiting for Child X, INSERT_INTENTION Lock</td>
+    </tr>
+    <tr>
+      <td> </td>
+      <td>INSERT INTO child_index VALUES (‘2’, ‘name2’, 2);</td>
+      <td>(4) Waiting for Child X, INSERT_INTENTION Lock</td>
+    </tr>
+    <tr>
+      <td> </td>
+      <td>Deadlock found when trying to get lock; try restarting transaction</td>
+      <td>(4) Needs Child X lock, but (2) holds Child X lock <br /> To resolve (4), (3) must resolve <br /> To resolve (3), TX2 must commit <br /> To commit TX2, (4) must resolve <br /> -&gt; Deadlock occurs</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="examining-the-deadlock-logic-in-production">Examining the Deadlock Logic in Production</h2>
+
+<p>Performing row delete on <code class="language-plaintext highlighter-rouge">child_index</code> followed by row insert on <code class="language-plaintext highlighter-rouge">child_index</code> in two sessions causes a deadlock 💣</p>
+
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">parent</span> <span class="k">WHERE</span> <span class="n">id</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">child</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">'child_1'</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span>
+<span class="k">DELETE</span> <span class="k">FROM</span> <span class="n">child_index</span> <span class="k">WHERE</span> <span class="n">parent_id</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">child_index</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">'child_index_1'</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span>
+<span class="k">UPDATE</span> <span class="n">parent</span> <span class="k">SET</span> <span class="n">updated_at</span> <span class="o">=</span> <span class="n">NOW</span><span class="p">()</span> <span class="k">WHERE</span> <span class="n">id</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+</code></pre></div></div>
+
+<div class="language-java highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nd">@Transactional</span>
+<span class="kd">public</span> <span class="kt">void</span> <span class="nf">createChildAndChildIndex</span><span class="o">(</span><span class="kt">long</span> <span class="n">parentId</span><span class="o">)</span> <span class="o">{</span>
+    <span class="kt">var</span> <span class="n">parent</span> <span class="o">=</span> <span class="n">parentRepository</span><span class="o">.</span><span class="na">findById</span><span class="o">(</span><span class="n">parentId</span><span class="o">);</span>
+
+    <span class="n">childIndexRepository</span><span class="o">.</span><span class="na">deleteByParent</span><span class="o">(</span><span class="n">parent</span><span class="o">);</span>
+    <span class="n">childIndexRepository</span><span class="o">.</span><span class="na">save</span><span class="o">(</span><span class="k">new</span> <span class="n">Child_Index</span><span class="o">(</span><span class="err">'</span><span class="n">child_index_1</span><span class="err">'</span><span class="o">,</span> <span class="n">parent</span><span class="o">));</span>
+<span class="o">}</span>
+</code></pre></div></div>
+<ul>
+  <li>Interestingly, a deadlock occurs when the data to be deleted does not exist.</li>
+  <li>When the data to be deleted exists, the lock waits until it can be acquired.</li>
+</ul>
+
+<h2 id="solutions-to-resolve-the-deadlock-in-production">Solutions to Resolve the Deadlock in Production</h2>
+
+<h3 id="-first-attempt-delete-row-only-if-it-exists">❎ First Attempt: Delete Row Only If It Exists</h3>
+<div class="language-java highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nd">@Transactional</span>
+<span class="kd">public</span> <span class="kt">void</span> <span class="nf">createParent</span><span class="o">(</span><span class="kt">long</span> <span class="n">parentId</span><span class="o">)</span> <span class="o">{</span>
+    <span class="kt">var</span> <span class="n">parent</span> <span class="o">=</span> <span class="n">parentRepository</span><span class="o">.</span><span class="na">findById</span><span class="o">(</span><span class="n">parentId</span><span class="o">);</span>
+
+    <span class="k">if</span> <span class="o">(</span><span class="n">childIndexRepository</span><span class="o">.</span><span class="na">findByParent</span><span class="o">(</span><span class="n">parent</span><span class="o">).</span><span class="na">isPresent</span><span class="o">())</span> <span class="o">{</span>
+        <span class="n">childIndexRepository</span><span class="o">.</span><span class="na">deleteByParent</span><span class="o">(</span><span class="n">parent</span><span class="o">);</span>
+    <span class="o">}</span>
+    <span class="n">childIndexRepository</span><span class="o">.</span><span class="na">save</span><span class="o">(</span><span class="k">new</span> <span class="n">Child_Index</span><span class="o">(</span><span class="err">'</span><span class="n">child_index_1</span><span class="err">'</span><span class="o">,</span> <span class="n">parent</span><span class="o">));</span>
+<span class="o">}</span>
+</code></pre></div></div>
+<ul>
+  <li>This prevents the exclusive lock due to the unconditional delete logic.</li>
+  <li>If concurrent requests find no data in <code class="language-plaintext highlighter-rouge">childIndexRepository.findByParent</code>, data may be duplicated.
+    <ul>
+      <li>Testing with a 300ms thread sleep confirmed duplication.</li>
+    </ul>
+  </li>
+</ul>
+
+<h3 id="-second-attempt-delete-row-only-if-it-exists-with-unique-constraint">✅ Second Attempt: Delete Row Only If It Exists with Unique Constraint</h3>
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">child_index</span>
+<span class="p">(</span>
+    <span class="n">id</span>           <span class="nb">bigint</span>          <span class="k">not</span> <span class="k">null</span> <span class="k">primary</span> <span class="k">key</span><span class="p">,</span>
+    <span class="n">name</span>         <span class="nb">varchar</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span>    <span class="k">null</span><span class="p">,</span>
+    <span class="n">parent_id</span>    <span class="nb">bigint</span>          <span class="k">null</span><span class="p">,</span>
+    <span class="k">CONSTRAINT</span> <span class="n">parent_id_unique</span> <span class="k">UNIQUE</span> <span class="p">(</span><span class="n">parent_id</span><span class="p">)</span>
+<span class="p">);</span>
+<span class="k">CREATE</span> <span class="k">INDEX</span> <span class="n">parent_id</span> <span class="k">ON</span> <span class="n">child_index</span> <span class="p">(</span><span class="n">parent_id</span><span class="p">);</span>
+</code></pre></div></div>
+<ul>
+  <li>Concurrent requests with no data found in <code class="language-plaintext highlighter-rouge">childIndexRepository.findByParent</code> result in a duplicate key error for subsequent commits.</li>
+</ul>
+
+<h3 id="-third-attempt-add-key-for-concurrency-control-in-redis">❎ Third Attempt: Add Key for Concurrency Control in Redis</h3>
+<ul>
+  <li>Due to occasional deadlocks and the absence of Redis usage in this service, the cache resource overhead seemed excessive.</li>
+</ul>
+
+<h3 id="-fourth-attempt-limit-requests">❎ Fourth Attempt: Limit Requests</h3>
+<ul>
+  <li>Using Bucket4j to limit the number of API calls a client can make within a specific time frame.</li>
+  <li>Deadlock prevention is impossible with multiple servers as concurrent requests can hit different servers.</li>
+</ul>
+
+<h2 id="summary">Summary</h2>
+<ol>
+  <li>When data is not present, delete queries allow delete and select but wait for the lock during insert.</li>
+  <li>For more on locks, refer to the <a href="https://dev.mysql.com/doc/refman/8.0/en/innodb-locking.html#innodb-record-locks">InnoDB Locking Documentation in MySQL Official Manual</a>. It is well-organized with examples.</li>
+</ol>
+
+<h3 id="interesting-experiment">Interesting Experiment</h3>
+<h4 id="query-based-on-indexed-column">Query Based on Indexed Column</h4>
+<ul>
+  <li>When data exists, the second transaction waits for the lock during delete.
+    <div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">BEGIN</span> <span class="p">;</span>
+<span class="k">DELETE</span> <span class="k">FROM</span> <span class="n">child_index</span> <span class="k">WHERE</span> <span class="n">parent_id</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">child_index</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">'child_index_1'</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span>
+<span class="k">COMMIT</span> <span class="p">;</span>
+</code></pre></div>    </div>
+  </li>
+  <li>When data does not exist, the second transaction acquires the lock immediately during delete.
+    <div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">BEGIN</span> <span class="p">;</span>
+<span class="k">DELETE</span> <span class="k">FROM</span> <span class="n">child_index</span> <span class="k">WHERE</span> <span class="n">parent_id</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">child_index</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">'child_index_1'</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span>
+<span class="k">COMMIT</span> <span class="p">;</span>
+</code></pre></div>    </div>
+    <h4 id="query-based-on-non-indexed-column">Query Based on Non-Indexed Column</h4>
+  </li>
+  <li>Whether data exists or not, the second transaction waits for the lock during delete.
+    <div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">BEGIN</span> <span class="p">;</span>
+<span class="k">DELETE</span> <span class="k">FROM</span> <span class="n">child_index</span> <span class="k">WHERE</span> <span class="n">name</span> <span class="o">=</span> <span class="s1">'child_index_2'</span><span class="p">;</span>
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">child_index</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">'child_index_1'</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span>
+<span class="k">COMMIT</span> <span class="p">;</span>
+</code></pre></div>    </div>
+  </li>
+</ul>
+
+<h3 id="for-the-record">For the Record</h3>
+<details>
+<summary>SHOW ENGINE innodb STATUS;</summary>
+  *** (1) TRANSACTION:TRANSACTION 13034, ACTIVE 6 sec insertingmysql tables in use 1, locked 1LOCK WAIT 4 lock struct(s), heap size 1128, 3 row lock(s), undo log entries 1MySQL thread id 280, OS thread handle 6136639488, query id 21716 localhost 127.0.0.1 root update/* ApplicationName=DataGrip 2022.3.2 */ insert into child values ('2', 'name2', 2)
+
+*** (1) HOLDS THE LOCK(S):RECORD LOCKS space id 154 page no 4 n bits 72 index PRIMARY of table jpa.child trx id 13034 lock_mode X locks rec but not gapRecord lock, heap no 3 PHYSICAL RECORD: n_fields 5; compact format; info bits 0
+
+*** (1) WAITING FOR THIS LOCK TO BE GRANTED:RECORD LOCKS space id 154 page no 5 n bits 72 index parent_id of table jpa.child trx id 13034 lock_mode X insert intention waitingRecord lock, heap no 1 PHYSICAL RECORD: n_fields 1; compact format; info bits 0
+
+*** (2) TRANSACTION:TRANSACTION 13035, ACTIVE 4 sec insertingmysql tables in use 1, locked 1LOCK WAIT 3 lock struct(s), heap size 1128, 2 row lock(s)MySQL thread id 281, OS thread handle 6135525376, query id 21726 localhost 127.0.0.1 root update/* ApplicationName=DataGrip 2022.3.2 */ insert into child values ('2', 'name2', 2)
+
+*** (2) HOLDS THE LOCK(S):RECORD LOCKS space id 154 page no 5 n bits 72 index parent_id of table jpa.child trx id 13035 lock_mode XRecord lock, heap no 1 PHYSICAL RECORD: n_fields 1; compact format; info bits 0
+
+*** (2) WAITING FOR THIS LOCK TO BE GRANTED:RECORD LOCKS space id 154 page no 4 n bits 72 index PRIMARY of table jpa.child trx id 13035 lock mode S locks rec but not gap waitingRecord lock, heap no 3 PHYSICAL RECORD: n_fields 5; compact format; info bits 0
+
+- SELECT * FROM performance_schema.data_locks;
+
+| INDEX\_NAME | OBJECT\_INSTANCE\_BEGIN | LOCK\_TYPE | LOCK\_MODE | LOCK\_STATUS | LOCK\_DATA |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| null | 4813003272 | TABLE | IX | GRANTED | null |
+| parent\_id | 4823656472 | RECORD | X | GRANTED | supremum pseudo-record |
+| parent\_id | 4823656816 | RECORD | X,INSERT\_INTENTION | GRANTED | supremum pseudo-record |
+| parent\_id | 4823657160 | RECORD | X,GAP | GRANTED | 1, 1 |
+</details>
+
+  </article>
+</div>
+
+<div class="pagination">
+  
+  
+    <a href="/dead-lock-by-fk/" class="right arrow">&#8594;</a>
+  
+
+  
+  <!-- Start giscus -->
+<script src="https://giscus.app/client.js"
+        data-repo="hocaron/hocaron.github.io"
+        data-repo-id="R_kgDOL3mLWw"
+        data-category="Comments"
+        data-category-id="DIC_kwDOL3mLW84CfNm5"
+        data-mapping="pathname"
+        data-strict="0"
+        data-reactions-enabled="1"
+        data-emit-metadata="0"
+        data-input-position="bottom"
+        data-theme="light"
+        data-lang="en"
+        data-loading="lazy"
+        crossorigin="anonymous"
+        async>
+</script>
+<!-- End giscus -->
+
+  
+
+  <a href="#" class="top">Top</a>
+</div>
+
+<script src="../assets/js/toc.js"></script>
+
+  </main>
+
+  <footer>
+  <a href="mailto:kkannu0407@gmail.com">
+    <i class="far fa-envelope fa-fw"></i>
+  </a>
+  <a href="https://github.com/hocaron" target="_blank">
+    <i class="fab fa-github fa-fw"></i>
+  </a>
+  <a href="https://www.linkedin.com/in/sunwoo-ho-86b45823a" target="_blank">
+    <i class="fab fa-linkedin fa-fw"></i>
+  </a>
+
+  <br>
+  <span>&copy; 2024 Hocaron</span>
+</footer>
+
+</div>
+</body>
+</html>
