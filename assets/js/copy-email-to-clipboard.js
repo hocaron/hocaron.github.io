@@ -1,5 +1,4 @@
 function setupCopyEmailToClipboard() {
-    console.log("Test")
     var mailto = $('a[href^=mailto]');
     mailto.click(function() { return false; })
     mailto.wrap('<span class="mailto-wrapper">');
