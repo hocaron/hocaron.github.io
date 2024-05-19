@@ -1,6 +1,6 @@
 ---
 layout: post
-title:  "[트러블슈팅 - DB] 인덱스(Index)와 데드락(DeadLock)"
+title:  "[Troubleshooting - DB] 인덱스(Index)와 데드락(DeadLock)"
 comments: true
 tags: Troubleshooting
 excerpt_separator: <!--more-->
